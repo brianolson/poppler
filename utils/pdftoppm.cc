@@ -104,6 +104,7 @@ static GfxLCMSProfilePtr displayprofile;
 static char sep[2] = "-";
 static bool forceNum = false;
 static bool png = false;
+static bool pngMultiBlock = false;
 static bool jpeg = false;
 static bool jpegcmyk = false;
 static bool tiff = false;
@@ -161,6 +162,7 @@ static const ArgDesc argDesc[] = { { "-f", argInt, &firstPage, 0, "first page to
                                    { "-forcenum", argFlag, &forceNum, 0, "force page number even if there is only one page " },
 #ifdef ENABLE_LIBPNG
                                    { "-png", argFlag, &png, 0, "generate a PNG file" },
+                                   { "-pngMultiBlock", argFlag, &pngMultiBlock, 0, "generate a PNG file blob series" },
 #endif
 #ifdef ENABLE_LIBJPEG
                                    { "-jpeg", argFlag, &jpeg, 0, "generate a JPEG file" },
@@ -294,7 +296,23 @@ static void savePageSlice(PDFDoc *doc, SplashOutputDev *splashOut, int pg, int x
         setmode(fileno(stdout), O_BINARY);
 #endif
 
-        if (png) {
+      if (pngMultiBlock) {
+	char* pngdata;
+	size_t pngsize;
+	FILE* memfile = open_memstream(&pngdata, &pngsize);
+        if (memfile == NULL) {
+          perror("open_memstream");
+          return;
+        }
+	bitmap->writeImgFile(splashFormatPng, memfile, x_resolution, y_resolution);
+        fflush(memfile);
+	uint64_t lenout = (uint64_t)pngsize;
+	fwrite(&lenout, sizeof(lenout), 1, stdout);
+	fwrite(pngdata, 1, pngsize, stdout);
+	fflush(stdout);
+	free(pngdata);
+        free(memfile);
+      } else if (png) {
             bitmap->writeImgFile(splashFormatPng, stdout, x_resolution, y_resolution);
         } else if (jpeg) {
             bitmap->writeImgFile(splashFormatJpeg, stdout, x_resolution, y_resolution, &params);
