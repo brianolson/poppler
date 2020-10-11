@@ -1,5 +1,5 @@
 /* poppler-annotation.h: qt interface to poppler
- * Copyright (C) 2006-2008, 2012, 2013, 2018, 2019 Albert Astals Cid <aacid@kde.org>
+ * Copyright (C) 2006-2008, 2012, 2013, 2018-2020 Albert Astals Cid <aacid@kde.org>
  * Copyright (C) 2006, 2008 Pino Toscano <pino@kde.org>
  * Copyright (C) 2007, Brad Hards <bradh@frogmouth.net>
  * Copyright (C) 2010, Philip Lorenz <lorenzph+freedesktop@gmail.com>
@@ -166,8 +166,7 @@ public:
         AMovie = 11, ///< MovieAnnotation
         AScreen = 12, ///< ScreenAnnotation
         AWidget = 13, ///< WidgetAnnotation
-        ARichMedia = 14, ///< RichMediaAnnotation
-        A_BASE = 0
+        ARichMedia = 14 ///< RichMediaAnnotation
     };
 
     /**
@@ -175,7 +174,7 @@ public:
      *
      * They can be OR'd together (e.g. Annotation::FixedRotation | Annotation::DenyPrint).
      *
-     * \sa flags(), setFlags(int)
+     * \sa flags(), setFlags()
      */
     // NOTE: Only flags that are known to work are documented
     enum Flag
@@ -189,6 +188,7 @@ public:
         ToggleHidingOnMouse = 64,
         External = 128
     };
+    Q_DECLARE_FLAGS(Flags, Flag)
 
     enum LineStyle
     {
@@ -253,15 +253,15 @@ public:
     /**
      * Returns this annotation's flags
      *
-     * \sa Flag, setFlags(int)
+     * \sa Flag, setFlags()
      */
-    int flags() const;
+    Flags flags() const;
     /**
      * Sets this annotation's flags
      *
      * \sa Flag, flags(), \ref annotFixedRotation
      */
-    void setFlags(int flags);
+    void setFlags(Flags flags);
 
     /**
      * Returns this annotation's boundary rectangle in normalized coordinates
@@ -436,6 +436,12 @@ public:
         Callout,
         TypeWriter
     };
+    enum InplaceAlignPosition
+    {
+        InplaceAlignLeft,
+        InplaceAlignCenter,
+        InplaceAlignRight
+    };
 
     TextAnnotation(TextType type);
     ~TextAnnotation() override;
@@ -472,8 +478,8 @@ public:
     QColor textColor() const;
     void setTextColor(const QColor &color);
 
-    int inplaceAlign() const;
-    void setInplaceAlign(int align);
+    InplaceAlignPosition inplaceAlign() const;
+    void setInplaceAlign(InplaceAlignPosition align);
 
     QPointF calloutPoint(int id) const;
     QVector<QPointF> calloutPoints() const;
