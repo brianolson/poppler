@@ -17,7 +17,7 @@
 //
 // Copyright (C) 2006 Kristian Høgsberg <krh@redhat.com>
 // Copyright (C) 2006 Krzysztof Kowalczyk <kkowalczyk@gmail.com>
-// Copyright (C) 2008-2010, 2012, 2014, 2017-2020 Albert Astals Cid <aacid@kde.org>
+// Copyright (C) 2008-2010, 2012, 2014, 2017-2021 Albert Astals Cid <aacid@kde.org>
 // Copyright (C) 2012-2014 Fabio D'Urso <fabiodurso@hotmail.it>
 // Copyright (C) 2013 Jason Crain <jason@aquaticape.us>
 // Copyright (C) 2015, 2018 Adam Reichold <adam.reichold@t-online.de>
@@ -27,6 +27,8 @@
 // Copyright (C) 2019 Christophe Fergeau <cfergeau@redhat.com>
 // Copyright (C) 2019 Tomoyuki Kubota <himajin100000@gmail.com>
 // Copyright (C) 2019, 2020 Oliver Sander <oliver.sander@tu-dresden.de>
+// Copyright (C) 2019 Hans-Ulrich Jüttner <huj@froreich-bioscientia.de>
+// Copyright (C) 2020 Thorsten Behrens <Thorsten.Behrens@CIB.de>
 //
 // To see a description of the changes please see the Changelog file that
 // came with your tarball or type make ChangeLog if you are building from git
@@ -35,6 +37,8 @@
 
 #ifndef GooString_H
 #define GooString_H
+
+#include "poppler_private_export.h"
 
 #include <cstdarg>
 #include <string>
@@ -45,7 +49,7 @@
 #    define GOOSTRING_FORMAT
 #endif
 
-class GooString : private std::string
+class POPPLER_PRIVATE_EXPORT GooString : private std::string
 {
 public:
     // Create an empty string.
@@ -76,6 +80,7 @@ public:
 
     // Create a string from <lengthA> chars at <idx> in <str>.
     GooString(const GooString *str, int idx, int lengthA) : std::string(*str, idx, lengthA) { }
+    GooString(const std::string &str, int idx, int lengthA) : std::string(str, idx, lengthA) { }
 
     // Set content of a string to <newStr>.
     GooString *Set(const GooString *newStr)

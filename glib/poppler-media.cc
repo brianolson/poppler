@@ -39,6 +39,9 @@ struct _PopplerMedia
     GObject parent_instance;
 
     gchar *filename;
+    gboolean auto_play;
+    gboolean show_controls;
+    gfloat repeat_count;
 
     gchar *mime_type;
     Object stream;
@@ -98,6 +101,13 @@ PopplerMedia *_poppler_media_new(const MediaRendition *poppler_media)
         media->filename = g_strdup(poppler_media->getFileName()->c_str());
     }
 
+    const MediaParameters *mp = poppler_media->getBEParameters();
+    mp = mp ? mp : poppler_media->getMHParameters();
+
+    media->auto_play = mp ? mp->autoPlay : false;
+    media->show_controls = mp ? mp->showControls : false;
+    media->repeat_count = mp ? mp->repeatCount : 1.f;
+
     return media;
 }
 
@@ -141,6 +151,57 @@ gboolean poppler_media_is_embedded(PopplerMedia *poppler_media)
 }
 
 /**
+ * poppler_media_get_auto_play:
+ * @poppler_media: a #PopplerMedia
+ *
+ * Returns the auto-play parameter.
+ *
+ * Return value: %TRUE if media should auto-play, %FALSE otherwise
+ *
+ * Since: 20.04.0
+ */
+gboolean poppler_media_get_auto_play(PopplerMedia *poppler_media)
+{
+    g_return_val_if_fail(POPPLER_IS_MEDIA(poppler_media), FALSE);
+
+    return poppler_media->auto_play;
+}
+
+/**
+ * poppler_media_get_show_controls:
+ * @poppler_media: a #PopplerMedia
+ *
+ * Returns the show controls parameter.
+ *
+ * Return value: %TRUE if media should show controls, %FALSE otherwise
+ *
+ * Since: 20.04.0
+ */
+gboolean poppler_media_get_show_controls(PopplerMedia *poppler_media)
+{
+    g_return_val_if_fail(POPPLER_IS_MEDIA(poppler_media), FALSE);
+
+    return poppler_media->show_controls;
+}
+
+/**
+ * poppler_media_get_repeat_count:
+ * @poppler_media: a #PopplerMedia
+ *
+ * Returns the repeat count parameter.
+ *
+ * Return value: Repeat count parameter (float)
+ *
+ * Since: 20.04.0
+ */
+gfloat poppler_media_get_repeat_count(PopplerMedia *poppler_media)
+{
+    g_return_val_if_fail(POPPLER_IS_MEDIA(poppler_media), FALSE);
+
+    return poppler_media->repeat_count;
+}
+
+/**
  * poppler_media_get_mime_type:
  * @poppler_media: a #PopplerMedia
  *
@@ -164,7 +225,8 @@ static gboolean save_helper(const gchar *buf, gsize count, gpointer data, GError
 
     n = fwrite(buf, 1, count, f);
     if (n != count) {
-        g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errno), "Error writing to media file: %s", g_strerror(errno));
+        int errsv = errno;
+        g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errsv), "Error writing to media file: %s", g_strerror(errsv));
         return FALSE;
     }
 
@@ -214,6 +276,54 @@ gboolean poppler_media_save(PopplerMedia *poppler_media, const char *filename, G
 
     return result;
 }
+
+#ifndef G_OS_WIN32
+
+/**
+ * poppler_media_save_to_fd:
+ * @poppler_media: a #PopplerMedia
+ * @fd: a valid file descriptor open for writing
+ * @error: (allow-none): return location for error, or %NULL.
+ *
+ * Saves embedded stream of @poppler_media to a file referred to by @fd.
+ * If @error is set, %FALSE will be returned.
+ * Possible errors include those in the #G_FILE_ERROR domain
+ * and whatever the save function generates.
+ * Note that this function takes ownership of @fd; you must not operate on it
+ * again, nor close it.
+ *
+ * Return value: %TRUE, if the file successfully saved
+ *
+ * Since: 21.12.0
+ */
+gboolean poppler_media_save_to_fd(PopplerMedia *poppler_media, int fd, GError **error)
+{
+    gboolean result;
+    FILE *f;
+
+    g_return_val_if_fail(POPPLER_IS_MEDIA(poppler_media), FALSE);
+    g_return_val_if_fail(poppler_media->stream.isStream(), FALSE);
+
+    f = fdopen(fd, "wb");
+    if (f == nullptr) {
+        int errsv = errno;
+        g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errsv), "Failed to open FD %d for writing: %s", fd, g_strerror(errsv));
+        close(fd);
+        return FALSE;
+    }
+
+    result = poppler_media_save_to_callback(poppler_media, save_helper, f, error);
+
+    if (fclose(f) < 0) {
+        int errsv = errno;
+        g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errsv), "Failed to close FD %d, all data may not have been saved: %s", fd, g_strerror(errsv));
+        return FALSE;
+    }
+
+    return result;
+}
+
+#endif /* !G_OS_WIN32 */
 
 #define BUF_SIZE 1024
 

@@ -4,7 +4,10 @@
  * Copyright (C) 2016 Jakub Alba <jakubalba@gmail.com>
  * Copyright (C) 2018-2019 Marek Kasik <mkasik@redhat.com>
  * Copyright (C) 2019 Masamichi Hosoda <trueroad@trueroad.jp>
- * Copyright (C) 2019, Oliver Sander <oliver.sander@tu-dresden.de>
+ * Copyright (C) 2019, 2021 Oliver Sander <oliver.sander@tu-dresden.de>
+ * Copyright (C) 2020 Albert Astals Cid <aacid@kde.org>
+ * Copyright (C) 2021 André Guerreiro <aguerreiro1985@gmail.com>
+ * Copyright (C) 2021 Marek Kasik <mkasik@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,13 +27,26 @@
 #include "config.h"
 #include <cstring>
 
+#include <glib.h>
+
+#ifndef G_OS_WIN32
+#    include <fcntl.h>
+#    include <sys/stat.h>
+#    include <sys/types.h>
+#    include <unistd.h>
+#endif
+
 #ifndef __GI_SCANNER__
 #    include <memory>
 
+#    include <goo/gfile.h>
 #    include <splash/SplashBitmap.h>
+#    include <CachedFile.h>
 #    include <DateInfo.h>
+#    include <FILECacheLoader.h>
 #    include <GlobalParams.h>
 #    include <PDFDoc.h>
+#    include <SignatureInfo.h>
 #    include <Outline.h>
 #    include <ErrorCodes.h>
 #    include <UnicodeMap.h>
@@ -215,17 +231,21 @@ PopplerDocument *poppler_document_new_from_file(const char *uri, const char *pas
  * poppler_document_new_from_data:
  * @data: (array length=length) (element-type guint8): the pdf data
  * @length: the length of #data
- * @password: (allow-none): password to unlock the file with, or %NULL
- * @error: (allow-none): Return location for an error, or %NULL
+ * @password: (nullable): password to unlock the file with, or %NULL
+ * @error: (nullable): Return location for an error, or %NULL
  *
  * Creates a new #PopplerDocument.  If %NULL is returned, then @error will be
  * set. Possible errors include those in the #POPPLER_ERROR and #G_FILE_ERROR
  * domains.
  *
- * Note that @data must remain valid for as long as the returned document exists.
- * Prefer using poppler_document_new_from_bytes().
+ * Note that @data is not copied nor is a new reference to it created.
+ * It must remain valid and cannot be destroyed as long as the returned
+ * document exists.
  *
  * Return value: A newly created #PopplerDocument, or %NULL
+ *
+ * Deprecated: 0.82: This requires directly managing @length and @data.
+ * Use poppler_document_new_from_bytes() instead.
  **/
 PopplerDocument *poppler_document_new_from_data(char *data, int length, const char *password, GError **error)
 {
@@ -251,7 +271,10 @@ class BytesStream : public MemStream
 
 public:
     BytesStream(GBytes *bytes, Object &&dictA) : MemStream(static_cast<const char *>(g_bytes_get_data(bytes, nullptr)), 0, g_bytes_get_size(bytes), std::move(dictA)), m_bytes { g_bytes_ref(bytes), &g_bytes_unref } { }
+    ~BytesStream() override;
 };
+
+BytesStream::~BytesStream() = default;
 
 /**
  * poppler_document_new_from_bytes:
@@ -392,6 +415,86 @@ PopplerDocument *poppler_document_new_from_gfile(GFile *file, const char *passwo
     return document;
 }
 
+#ifndef G_OS_WIN32
+
+/**
+ * poppler_document_new_from_fd:
+ * @fd: a valid file descriptor
+ * @password: (allow-none): password to unlock the file with, or %NULL
+ * @error: (allow-none): Return location for an error, or %NULL
+ *
+ * Creates a new #PopplerDocument reading the PDF contents from the file
+ * descriptor @fd. @fd must refer to a regular file, or STDIN, and be open
+ * for reading.
+ * Possible errors include those in the #POPPLER_ERROR and #G_FILE_ERROR
+ * domains.
+ * Note that this function takes ownership of @fd; you must not operate on it
+ * again, nor close it.
+ *
+ * Returns: (transfer full): a new #PopplerDocument, or %NULL
+ *
+ * Since: 21.12.0
+ */
+PopplerDocument *poppler_document_new_from_fd(int fd, const char *password, GError **error)
+{
+    struct stat statbuf;
+    int flags;
+    BaseStream *stream;
+    PDFDoc *newDoc;
+    GooString *password_g;
+
+    g_return_val_if_fail(fd != -1, nullptr);
+
+    auto initer = std::make_unique<GlobalParamsIniter>(_poppler_error_cb);
+
+    if (fstat(fd, &statbuf) == -1 || (flags = fcntl(fd, F_GETFL, &flags)) == -1) {
+        int errsv = errno;
+        g_set_error_literal(error, G_FILE_ERROR, g_file_error_from_errno(errsv), g_strerror(errsv));
+        close(fd);
+        return nullptr;
+    }
+
+    switch (flags & O_ACCMODE) {
+    case O_RDONLY:
+    case O_RDWR:
+        break;
+    case O_WRONLY:
+    default:
+        g_set_error(error, G_FILE_ERROR, G_FILE_ERROR_BADF, "File descriptor %d is not readable", fd);
+        close(fd);
+        return nullptr;
+    }
+
+    if (fd == fileno(stdin) || !S_ISREG(statbuf.st_mode)) {
+        FILE *file;
+        if (fd == fileno(stdin)) {
+            file = stdin;
+        } else {
+            file = fdopen(fd, "rb");
+            if (!file) {
+                int errsv = errno;
+                g_set_error_literal(error, G_FILE_ERROR, g_file_error_from_errno(errsv), g_strerror(errsv));
+                close(fd);
+                return nullptr;
+            }
+        }
+
+        CachedFile *cachedFile = new CachedFile(new FILECacheLoader(file), nullptr);
+        stream = new CachedFileStream(cachedFile, 0, false, cachedFile->getLength(), Object(objNull));
+    } else {
+        GooFile *file = GooFile::open(fd);
+        stream = new FileStream(file, 0, false, file->size(), Object(objNull));
+    }
+
+    password_g = poppler_password_to_latin1(password);
+    newDoc = new PDFDoc(stream, password_g, password_g);
+    delete password_g;
+
+    return _poppler_document_new_from_pdfdoc(std::move(initer), newDoc, error);
+}
+
+#endif /* !G_OS_WIN32 */
+
 static gboolean handle_save_error(int err_code, GError **error)
 {
     switch (err_code) {
@@ -480,6 +583,58 @@ gboolean poppler_document_save_a_copy(PopplerDocument *document, const char *uri
     return retval;
 }
 
+#ifndef G_OS_WIN32
+
+/**
+ * poppler_document_save_to_fd:
+ * @document: a #PopplerDocument
+ * @fd: a valid file descriptor open for writing
+ * @include_changes: whether to include user changes (e.g. form fills)
+ * @error: (allow-none): return location for an error, or %NULL
+ *
+ * Saves @document. Any change made in the document such as
+ * form fields filled, annotations added or modified
+ * will be saved if @include_changes is %TRUE, or discarded i
+ * @include_changes is %FALSE.
+ *
+ * Note that this function takes ownership of @fd; you must not operate on it
+ * again, nor close it.
+ *
+ * If @error is set, %FALSE will be returned. Possible errors
+ * include those in the #G_FILE_ERROR domain.
+ *
+ * Return value: %TRUE, if the document was successfully saved
+ *
+ * Since: 21.12.0
+ **/
+gboolean poppler_document_save_to_fd(PopplerDocument *document, int fd, gboolean include_changes, GError **error)
+{
+    FILE *file;
+    OutStream *stream;
+    int rv;
+
+    g_return_val_if_fail(POPPLER_IS_DOCUMENT(document), FALSE);
+    g_return_val_if_fail(fd != -1, FALSE);
+
+    file = fdopen(fd, "wb");
+    if (file == nullptr) {
+        int errsv = errno;
+        g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errsv), "Failed to open FD %d for writing: %s", fd, g_strerror(errsv));
+        return FALSE;
+    }
+
+    stream = new FileOutStream(file, 0);
+    if (include_changes)
+        rv = document->doc->saveAs(stream);
+    else
+        rv = document->doc->saveWithoutChangesAs(stream);
+    delete stream;
+
+    return handle_save_error(rv, error);
+}
+
+#endif /* !G_OS_WIN32 */
+
 static void poppler_document_finalize(GObject *object)
 {
     PopplerDocument *document = POPPLER_DOCUMENT(object);
@@ -525,10 +680,14 @@ gboolean poppler_document_get_id(PopplerDocument *document, gchar **permanent_id
         *update_id = nullptr;
 
     if (document->doc->getID(permanent_id ? &permanent : nullptr, update_id ? &update : nullptr)) {
-        if (permanent_id)
-            *permanent_id = (gchar *)g_memdup(permanent.c_str(), 32);
-        if (update_id)
-            *update_id = (gchar *)g_memdup(update.c_str(), 32);
+        if (permanent_id) {
+            *permanent_id = g_new(char, 32);
+            memcpy(*permanent_id, permanent.c_str(), 32);
+        }
+        if (update_id) {
+            *update_id = g_new(char, 32);
+            memcpy(*update_id, update.c_str(), 32);
+        }
 
         retval = TRUE;
     }
@@ -836,7 +995,7 @@ static void _poppler_dest_destroy_value(gpointer value)
  * poppler_document_create_dests_tree:
  * @document: A #PopplerDocument
  *
- * Creates named destinations balanced binary tree in @document
+ * Creates a balanced binary tree of all named destinations in @document
  *
  * The tree key is strings in the form returned by
  * poppler_named_dest_to_bytestring() which constains a destination name.
@@ -1084,10 +1243,11 @@ gchar *poppler_document_get_pdf_version_string(PopplerDocument *document)
 /**
  * poppler_document_get_pdf_version:
  * @document: A #PopplerDocument
- * @major_version: (out) (allow-none): return location for the PDF major version number
- * @minor_version: (out) (allow-none): return location for the PDF minor version number
+ * @major_version: (out) (nullable): return location for the PDF major version number
+ * @minor_version: (out) (nullable): return location for the PDF minor version number
  *
- * Returns: the major and minor PDF version numbers
+ * Updates values referenced by @major_version & @minor_version with the
+ * major and minor PDF versions of @document.
  *
  * Since: 0.16
  **/
@@ -1116,11 +1276,8 @@ gchar *poppler_document_get_title(PopplerDocument *document)
 {
     g_return_val_if_fail(POPPLER_IS_DOCUMENT(document), NULL);
 
-    GooString *goo_title = document->doc->getDocInfoTitle();
-    gchar *utf8 = _poppler_goo_string_to_utf8(goo_title);
-    delete goo_title;
-
-    return utf8;
+    const std::unique_ptr<GooString> goo_title = document->doc->getDocInfoTitle();
+    return _poppler_goo_string_to_utf8(goo_title.get());
 }
 
 /**
@@ -1163,11 +1320,8 @@ gchar *poppler_document_get_author(PopplerDocument *document)
 {
     g_return_val_if_fail(POPPLER_IS_DOCUMENT(document), NULL);
 
-    GooString *goo_author = document->doc->getDocInfoAuthor();
-    gchar *utf8 = _poppler_goo_string_to_utf8(goo_author);
-    delete goo_author;
-
-    return utf8;
+    const std::unique_ptr<GooString> goo_author = document->doc->getDocInfoAuthor();
+    return _poppler_goo_string_to_utf8(goo_author.get());
 }
 
 /**
@@ -1210,11 +1364,8 @@ gchar *poppler_document_get_subject(PopplerDocument *document)
 {
     g_return_val_if_fail(POPPLER_IS_DOCUMENT(document), NULL);
 
-    GooString *goo_subject = document->doc->getDocInfoSubject();
-    gchar *utf8 = _poppler_goo_string_to_utf8(goo_subject);
-    delete goo_subject;
-
-    return utf8;
+    const std::unique_ptr<GooString> goo_subject = document->doc->getDocInfoSubject();
+    return _poppler_goo_string_to_utf8(goo_subject.get());
 }
 
 /**
@@ -1257,11 +1408,8 @@ gchar *poppler_document_get_keywords(PopplerDocument *document)
 {
     g_return_val_if_fail(POPPLER_IS_DOCUMENT(document), NULL);
 
-    GooString *goo_keywords = document->doc->getDocInfoKeywords();
-    gchar *utf8 = _poppler_goo_string_to_utf8(goo_keywords);
-    delete goo_keywords;
-
-    return utf8;
+    const std::unique_ptr<GooString> goo_keywords = document->doc->getDocInfoKeywords();
+    return _poppler_goo_string_to_utf8(goo_keywords.get());
 }
 
 /**
@@ -1306,11 +1454,8 @@ gchar *poppler_document_get_creator(PopplerDocument *document)
 {
     g_return_val_if_fail(POPPLER_IS_DOCUMENT(document), NULL);
 
-    GooString *goo_creator = document->doc->getDocInfoCreator();
-    gchar *utf8 = _poppler_goo_string_to_utf8(goo_creator);
-    delete goo_creator;
-
-    return utf8;
+    const std::unique_ptr<GooString> goo_creator = document->doc->getDocInfoCreator();
+    return _poppler_goo_string_to_utf8(goo_creator.get());
 }
 
 /**
@@ -1355,11 +1500,8 @@ gchar *poppler_document_get_producer(PopplerDocument *document)
 {
     g_return_val_if_fail(POPPLER_IS_DOCUMENT(document), NULL);
 
-    GooString *goo_producer = document->doc->getDocInfoProducer();
-    gchar *utf8 = _poppler_goo_string_to_utf8(goo_producer);
-    delete goo_producer;
-
-    return utf8;
+    const std::unique_ptr<GooString> goo_producer = document->doc->getDocInfoProducer();
+    return _poppler_goo_string_to_utf8(goo_producer.get());
 }
 
 /**
@@ -1401,14 +1543,13 @@ time_t poppler_document_get_creation_date(PopplerDocument *document)
 {
     g_return_val_if_fail(POPPLER_IS_DOCUMENT(document), (time_t)-1);
 
-    GooString *str = document->doc->getDocInfoCreatDate();
-    if (str == nullptr) {
+    const std::unique_ptr<GooString> str = document->doc->getDocInfoCreatDate();
+    if (!str) {
         return (time_t)-1;
     }
 
     time_t date;
-    gboolean success = _poppler_convert_pdf_date_to_gtime(str, &date);
-    delete str;
+    gboolean success = _poppler_convert_pdf_date_to_gtime(str.get(), &date);
 
     return (success) ? date : (time_t)-1;
 }
@@ -1445,12 +1586,12 @@ GDateTime *poppler_document_get_creation_date_time(PopplerDocument *document)
 {
     g_return_val_if_fail(POPPLER_IS_DOCUMENT(document), nullptr);
 
-    GooString *str = document->doc->getDocInfoCreatDate();
+    std::unique_ptr<GooString> str { document->doc->getDocInfoCreatDate() };
 
     if (!str)
         return nullptr;
 
-    return _poppler_convert_pdf_date_to_date_time(str);
+    return _poppler_convert_pdf_date_to_date_time(str.get());
 }
 
 /**
@@ -1489,14 +1630,13 @@ time_t poppler_document_get_modification_date(PopplerDocument *document)
 {
     g_return_val_if_fail(POPPLER_IS_DOCUMENT(document), (time_t)-1);
 
-    GooString *str = document->doc->getDocInfoModDate();
-    if (str == nullptr) {
+    const std::unique_ptr<GooString> str = document->doc->getDocInfoModDate();
+    if (!str) {
         return (time_t)-1;
     }
 
     time_t date;
-    gboolean success = _poppler_convert_pdf_date_to_gtime(str, &date);
-    delete str;
+    gboolean success = _poppler_convert_pdf_date_to_gtime(str.get(), &date);
 
     return (success) ? date : (time_t)-1;
 }
@@ -1533,12 +1673,12 @@ GDateTime *poppler_document_get_modification_date_time(PopplerDocument *document
 {
     g_return_val_if_fail(POPPLER_IS_DOCUMENT(document), nullptr);
 
-    GooString *str = document->doc->getDocInfoModDate();
+    std::unique_ptr<GooString> str { document->doc->getDocInfoModDate() };
 
     if (!str)
         return nullptr;
 
-    return _poppler_convert_pdf_date_to_date_time(str);
+    return _poppler_convert_pdf_date_to_date_time(str.get());
 }
 
 /**
@@ -1579,6 +1719,25 @@ gboolean poppler_document_is_linearized(PopplerDocument *document)
     g_return_val_if_fail(POPPLER_IS_DOCUMENT(document), FALSE);
 
     return document->doc->isLinearized();
+}
+
+/**
+ * poppler_document_get_n_signatures:
+ * @document: A #PopplerDocument
+ *
+ * Returns how many digital signatures @document contains.
+ * PDF digital signatures ensure that the content hash not been altered since last edit and
+ * that it was produced by someone the user can trust
+ *
+ * Return value: The number of signatures found in the document
+ *
+ * Since: 21.12.0
+ **/
+gint poppler_document_get_n_signatures(const PopplerDocument *document)
+{
+    g_return_val_if_fail(POPPLER_IS_DOCUMENT(document), 0);
+
+    return document->doc->getNumSignatureFields();
 }
 
 /**
@@ -1748,12 +1907,12 @@ gint poppler_document_get_print_n_copies(PopplerDocument *document)
  * @n_ranges: (out): return location for number of ranges
  *
  * Returns the suggested page ranges to print in the form of array
- * of #PopplerPageRanges and number of ranges.
- * NULL pointer means that the document does not specify page ranges
+ * of #PopplerPageRange<!-- -->s and number of ranges.
+ * %NULL pointer means that the document does not specify page ranges
  * for printing.
  *
  * Returns: (array length=n_ranges) (transfer full): an array
- *          of #PopplerPageRanges or NULL. Free the array when
+ *          of #PopplerPageRange<!-- -->s or %NULL. Free the array when
  *          it is no longer needed.
  *
  * Since: 0.80
@@ -1838,7 +1997,7 @@ gchar *poppler_document_get_pdf_subtype_string(PopplerDocument *document)
 {
     g_return_val_if_fail(POPPLER_IS_DOCUMENT(document), NULL);
 
-    GooString *infostring;
+    std::unique_ptr<GooString> infostring;
 
     switch (document->doc->getPDFSubtype()) {
     case subtypePDFA:
@@ -1858,14 +2017,12 @@ gchar *poppler_document_get_pdf_subtype_string(PopplerDocument *document)
         break;
     case subtypeNone:
     case subtypeNull:
-    default:
-        infostring = nullptr;
+    default: {
+        /* nothing */
+    }
     }
 
-    gchar *utf8 = _poppler_goo_string_to_utf8(infostring);
-    delete infostring;
-
-    return utf8;
+    return _poppler_goo_string_to_utf8(infostring.get());
 }
 
 /**
@@ -1940,11 +2097,10 @@ gchar *poppler_document_get_metadata(PopplerDocument *document)
 
     catalog = document->doc->getCatalog();
     if (catalog && catalog->isOk()) {
-        GooString *s = catalog->readMetadata();
+        std::unique_ptr<GooString> s = catalog->readMetadata();
 
-        if (s != nullptr) {
+        if (s) {
             retval = g_strdup(s->c_str());
-            delete s;
         }
     }
 
@@ -1954,7 +2110,7 @@ gchar *poppler_document_get_metadata(PopplerDocument *document)
 /**
  * poppler_document_reset_form:
  * @document: A #PopplerDocument
- * @fields: list of fields to reset
+ * @fields: (element-type utf8) (nullable): list of fields to reset
  * @exclude_fields: whether to reset all fields except those in @fields
  *
  * Resets the form fields specified by fields if exclude_fields is FALSE.
@@ -2351,7 +2507,7 @@ struct _PopplerIndexIter
     int index;
 };
 
-POPPLER_DEFINE_BOXED_TYPE(PopplerIndexIter, poppler_index_iter, poppler_index_iter_copy, poppler_index_iter_free)
+G_DEFINE_BOXED_TYPE(PopplerIndexIter, poppler_index_iter, poppler_index_iter_copy, poppler_index_iter_free)
 
 /**
  * poppler_index_iter_copy:
@@ -2570,7 +2726,7 @@ struct _PopplerFontsIter
     int index;
 };
 
-POPPLER_DEFINE_BOXED_TYPE(PopplerFontsIter, poppler_fonts_iter, poppler_fonts_iter_copy, poppler_fonts_iter_free)
+G_DEFINE_BOXED_TYPE(PopplerFontsIter, poppler_fonts_iter, poppler_fonts_iter_copy, poppler_fonts_iter_free)
 
 /**
  * poppler_fonts_iter_get_full_name:
@@ -2703,14 +2859,13 @@ PopplerFontType poppler_fonts_iter_get_font_type(PopplerFontsIter *iter)
  */
 const char *poppler_fonts_iter_get_encoding(PopplerFontsIter *iter)
 {
-    const GooString *encoding;
     FontInfo *info;
 
     info = iter->items[iter->index];
 
-    encoding = info->getEncoding();
-    if (encoding != nullptr) {
-        return encoding->c_str();
+    const std::string &encoding = info->getEncoding();
+    if (!encoding.empty()) {
+        return encoding.c_str();
     } else {
         return nullptr;
     }
@@ -3102,7 +3257,7 @@ struct _PopplerLayersIter
     int index;
 };
 
-POPPLER_DEFINE_BOXED_TYPE(PopplerLayersIter, poppler_layers_iter, poppler_layers_iter_copy, poppler_layers_iter_free)
+G_DEFINE_BOXED_TYPE(PopplerLayersIter, poppler_layers_iter, poppler_layers_iter_copy, poppler_layers_iter_free)
 
 /**
  * poppler_layers_iter_copy:
@@ -3292,6 +3447,8 @@ static void poppler_ps_file_class_init(PopplerPSFileClass *klass)
 static void poppler_ps_file_init(PopplerPSFile *ps_file)
 {
     ps_file->out = nullptr;
+    ps_file->fd = -1;
+    ps_file->filename = nullptr;
     ps_file->paper_width = -1;
     ps_file->paper_height = -1;
     ps_file->duplex = FALSE;
@@ -3304,6 +3461,10 @@ static void poppler_ps_file_finalize(GObject *object)
     delete ps_file->out;
     g_object_unref(ps_file->document);
     g_free(ps_file->filename);
+#ifndef G_OS_WIN32
+    if (ps_file->fd != -1)
+        close(ps_file->fd);
+#endif /* !G_OS_WIN32 */
 
     G_OBJECT_CLASS(poppler_ps_file_parent_class)->finalize(object);
 }
@@ -3317,7 +3478,7 @@ static void poppler_ps_file_finalize(GObject *object)
  *
  * Create a new postscript file to render to
  *
- * Return value: a PopplerPSFile
+ * Return value: (transfer full): a PopplerPSFile
  **/
 PopplerPSFile *poppler_ps_file_new(PopplerDocument *document, const char *filename, int first_page, int n_pages)
 {
@@ -3335,6 +3496,42 @@ PopplerPSFile *poppler_ps_file_new(PopplerDocument *document, const char *filena
 
     return ps_file;
 }
+
+#ifndef G_OS_WIN32
+
+/**
+ * poppler_ps_file_new_fd:
+ * @document: a #PopplerDocument
+ * @fd: a valid file descriptor open for writing
+ * @first_page: the first page to print
+ * @n_pages: the number of pages to print
+ *
+ * Create a new postscript file to render to.
+ * Note that this function takes ownership of @fd; you must not operate on it
+ * again, nor close it.
+ *
+ * Return value: (transfer full): a #PopplerPSFile
+ *
+ * Since: 21.12.0
+ **/
+PopplerPSFile *poppler_ps_file_new_fd(PopplerDocument *document, int fd, int first_page, int n_pages)
+{
+    PopplerPSFile *ps_file;
+
+    g_return_val_if_fail(POPPLER_IS_DOCUMENT(document), nullptr);
+    g_return_val_if_fail(fd != -1, nullptr);
+    g_return_val_if_fail(n_pages > 0, nullptr);
+
+    ps_file = (PopplerPSFile *)g_object_new(POPPLER_TYPE_PS_FILE, nullptr);
+    ps_file->document = (PopplerDocument *)g_object_ref(document);
+    ps_file->fd = fd;
+    ps_file->first_page = first_page + 1;
+    ps_file->last_page = first_page + 1 + n_pages - 1;
+
+    return ps_file;
+}
+
+#endif /* !G_OS_WIN32 */
 
 /**
  * poppler_ps_file_set_paper_size:
@@ -3399,7 +3596,6 @@ PopplerFormField *poppler_document_get_form_field(PopplerDocument *document, gin
     Page *page;
     unsigned pageNum;
     unsigned fieldNum;
-    FormPageWidgets *widgets;
     FormWidget *field;
 
     FormWidget::decodeID(id, &pageNum, &fieldNum);
@@ -3408,7 +3604,7 @@ PopplerFormField *poppler_document_get_form_field(PopplerDocument *document, gin
     if (!page)
         return nullptr;
 
-    widgets = page->getFormWidgets();
+    const std::unique_ptr<FormPageWidgets> widgets = page->getFormWidgets();
     if (!widgets)
         return nullptr;
 
@@ -3451,12 +3647,20 @@ GDateTime *_poppler_convert_pdf_date_to_date_time(const GooString *date)
     int year, mon, day, hour, min, sec, tzHours, tzMins;
     char tz;
 
-    if (parseDateString(date->c_str(), &year, &mon, &day, &hour, &min, &sec, &tz, &tzHours, &tzMins)) {
+    if (parseDateString(date, &year, &mon, &day, &hour, &min, &sec, &tz, &tzHours, &tzMins)) {
         if (tz == '+' || tz == '-') {
             gchar *identifier;
 
             identifier = g_strdup_printf("%c%02u:%02u", tz, tzHours, tzMins);
+#if GLIB_CHECK_VERSION(2, 68, 0)
+            time_zone = g_time_zone_new_identifier(identifier);
+            if (!time_zone) {
+                g_debug("Failed to create time zone for identifier \"%s\"", identifier);
+                time_zone = g_time_zone_new_utc();
+            }
+#else
             time_zone = g_time_zone_new(identifier);
+#endif
             g_free(identifier);
         } else if (tz == '\0' || tz == 'Z') {
             time_zone = g_time_zone_new_utc();

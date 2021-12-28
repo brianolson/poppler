@@ -17,7 +17,7 @@
 // All changes made under the Poppler project to this file are licensed
 // under GPL version 2 or later
 //
-// Copyright (C) 2005-2013, 2016-2020 Albert Astals Cid <aacid@kde.org>
+// Copyright (C) 2005-2013, 2016-2021 Albert Astals Cid <aacid@kde.org>
 // Copyright (C) 2008 Kjartan Maraas <kmaraas@gnome.org>
 // Copyright (C) 2008 Boris Toloknov <tlknv@yandex.ru>
 // Copyright (C) 2008 Haruyuki Kawabe <Haruyuki.Kawabe@unisys.co.jp>
@@ -44,6 +44,8 @@
 // Copyright (C) 2018 Thibaut Brard <thibaut.brard@gmail.com>
 // Copyright (C) 2018-2020 Adam Reichold <adam.reichold@t-online.de>
 // Copyright (C) 2019, 2020 Oliver Sander <oliver.sander@tu-dresden.de>
+// Copyright (C) 2020 Eddie Kohler <ekohler@gmail.com>
+// Copyright (C) 2021 Christopher Hasse <hasse.christopher@gmail.com>
 //
 // To see a description of the changes please see the Changelog file that
 // came with your tarball or type make ChangeLog if you are building from git
@@ -189,7 +191,7 @@ HtmlString::HtmlString(GfxState *state, double fontSize, HtmlFontAccu *_fonts) :
         yMax = y - descent * fontSize;
         GfxRGB rgb;
         state->getFillRGB(&rgb);
-        HtmlFont hfont = HtmlFont(font, static_cast<int>(fontSize), rgb);
+        HtmlFont hfont = HtmlFont(font, static_cast<int>(fontSize), rgb, state->getFillOpacity());
         if (isMatRotOrSkew(state->getTextMat())) {
             double normalizedMatrix[4];
             memcpy(normalizedMatrix, state->getTextMat(), sizeof(normalizedMatrix));
@@ -284,7 +286,6 @@ HtmlPage::HtmlPage(bool rawOrderA)
     yxCur1 = yxCur2 = nullptr;
     fonts = new HtmlFontAccu();
     links = new HtmlLinks();
-    imgList = new std::vector<HtmlImage *>();
     pageWidth = 0;
     pageHeight = 0;
     fontsPageMarker = 0;
@@ -298,10 +299,9 @@ HtmlPage::~HtmlPage()
     delete DocName;
     delete fonts;
     delete links;
-    for (auto entry : *imgList) {
+    for (auto entry : imgList) {
         delete entry;
     }
-    delete imgList;
 }
 
 void HtmlPage::updateFont(GfxState *state)
@@ -517,11 +517,11 @@ void HtmlPage::coalesce()
         bool found;
         while (str1) {
             double size = str1->yMax - str1->yMin;
-            double xLimit = str1->xMin + size * 0.2;
+            double xLimit = str1->xMin + size;
             found = false;
             for (str2 = str1, str3 = str1->yxNext; str3 && str3->xMin < xLimit; str2 = str3, str3 = str2->yxNext) {
                 if (str3->len == str1->len && !memcmp(str3->text, str1->text, str1->len * sizeof(Unicode)) && fabs(str3->yMin - str1->yMin) < size * 0.2 && fabs(str3->yMax - str1->yMax) < size * 0.2
-                    && fabs(str3->xMax - str1->xMax) < size * 0.2) {
+                    && fabs(str3->xMax - str1->xMax) < size * 0.1) {
                     found = true;
                     // printf("found duplicate!\n");
                     break;
@@ -629,8 +629,8 @@ void HtmlPage::coalesce()
             }
 
             /* fix <i>, <b> if str1 and str2 differ and handle switch of links */
-            HtmlLink *hlink1 = str1->getLink();
-            HtmlLink *hlink2 = str2->getLink();
+            const HtmlLink *hlink1 = str1->getLink();
+            const HtmlLink *hlink2 = str2->getLink();
             bool switch_links = !hlink1 || !hlink2 || !hlink1->isEqualDest(*hlink2);
             bool finish_a = switch_links && hlink1 != nullptr;
             bool finish_italic = hfont1->isItalic() && (!hfont2->isItalic() || finish_a);
@@ -712,7 +712,7 @@ void HtmlPage::dumpAsXML(FILE *f, int page)
         delete fontCSStyle;
     }
 
-    for (auto ptr : *imgList) {
+    for (auto ptr : imgList) {
         auto img = static_cast<HtmlImage *>(ptr);
         if (!noRoundedCoordinates) {
             fprintf(f, "<image top=\"%d\" left=\"%d\" ", xoutRound(img->yMin), xoutRound(img->xMin));
@@ -724,7 +724,7 @@ void HtmlPage::dumpAsXML(FILE *f, int page)
         fprintf(f, "src=\"%s\"/>\n", img->fName->c_str());
         delete img;
     }
-    imgList->clear();
+    imgList.clear();
 
     for (HtmlString *tmp = yxStrings; tmp; tmp = tmp->yxNext) {
         if (tmp->htext) {
@@ -818,7 +818,7 @@ int HtmlPage::dumpComplexHeaders(FILE *const file, FILE *&pageFile, int page)
         }
 
         if (!pageFile) {
-            error(errIO, -1, "Couldn't open html file '{0:t}'", pageFileName.c_str());
+            error(errIO, -1, "Couldn't open html file '{0:s}'", pageFileName.c_str());
             return 1;
         }
 
@@ -909,7 +909,7 @@ void HtmlPage::dump(FILE *f, int pageNum, const std::vector<std::string> &backgr
     } else {
         fprintf(f, "<a name=%d></a>", pageNum);
         // Loop over the list of image names on this page
-        for (auto ptr : *imgList) {
+        for (auto ptr : imgList) {
             auto img = static_cast<HtmlImage *>(ptr);
 
             // see printCSS() for class names
@@ -923,7 +923,7 @@ void HtmlPage::dump(FILE *f, int pageNum, const std::vector<std::string> &backgr
             fprintf(f, "<img%s src=\"%s\"/><br/>\n", styles[style_index], img->fName->c_str());
             delete img;
         }
-        imgList->clear();
+        imgList.clear();
 
         GooString *str;
         for (HtmlString *tmp = yxStrings; tmp; tmp = tmp->yxNext) {
@@ -974,7 +974,7 @@ void HtmlPage::setDocName(const char *fname)
 void HtmlPage::addImage(GooString *fname, GfxState *state)
 {
     HtmlImage *img = new HtmlImage(fname, state);
-    imgList->push_back(img);
+    imgList.push_back(img);
 }
 
 //------------------------------------------------------------------------
@@ -1072,16 +1072,15 @@ HtmlOutputDev::HtmlOutputDev(Catalog *catalogA, const char *fileName, const char
     needClose = false;
     pages = new HtmlPage(rawOrder);
 
-    glMetaVars = new std::vector<HtmlMetaVar *>();
-    glMetaVars->push_back(new HtmlMetaVar("generator", "pdftohtml 0.36"));
+    glMetaVars.push_back(new HtmlMetaVar("generator", "pdftohtml 0.36"));
     if (author)
-        glMetaVars->push_back(new HtmlMetaVar("author", author));
+        glMetaVars.push_back(new HtmlMetaVar("author", author));
     if (keywords)
-        glMetaVars->push_back(new HtmlMetaVar("keywords", keywords));
+        glMetaVars.push_back(new HtmlMetaVar("keywords", keywords));
     if (date)
-        glMetaVars->push_back(new HtmlMetaVar("date", date));
+        glMetaVars.push_back(new HtmlMetaVar("date", date));
     if (subject)
-        glMetaVars->push_back(new HtmlMetaVar("subject", subject));
+        glMetaVars.push_back(new HtmlMetaVar("subject", subject));
 
     maxPageWidth = 0;
     maxPageHeight = 0;
@@ -1169,10 +1168,9 @@ HtmlOutputDev::~HtmlOutputDev()
     delete Docname;
     delete docTitle;
 
-    for (auto entry : *glMetaVars) {
+    for (auto entry : glMetaVars) {
         delete entry;
     }
-    delete glMetaVars;
 
     if (fContentsFrame) {
         fputs("</body>\n</html>\n", fContentsFrame);
@@ -1231,11 +1229,10 @@ void HtmlOutputDev::startPage(int pageNumA, GfxState *state, XRef *xref)
 
 void HtmlOutputDev::endPage()
 {
-    Links *linksList = docPage->getLinks();
+    std::unique_ptr<Links> linksList = docPage->getLinks();
     for (int i = 0; i < linksList->getNumLinks(); ++i) {
         doProcessLink(linksList->getLink(i));
     }
-    delete linksList;
 
     pages->conv();
     pages->coalesce();
@@ -1611,7 +1608,7 @@ void HtmlOutputDev::dumpMetaVars(FILE *file)
 {
     GooString *var;
 
-    for (const HtmlMetaVar *t : *glMetaVars) {
+    for (const HtmlMetaVar *t : glMetaVars) {
         var = t->toString();
         fprintf(file, "%s\n", var->c_str());
         delete var;
@@ -1731,7 +1728,6 @@ bool HtmlOutputDev::newHtmlOutlineLevel(FILE *output, const std::vector<OutlineI
             fputs("\n", output);
             newHtmlOutlineLevel(output, item->getKids(), level + 1);
         }
-        item->close();
         fputs("</li>\n", output);
     }
     fputs("</ul>\n", output);
@@ -1757,7 +1753,6 @@ void HtmlOutputDev::newXmlOutlineLevel(FILE *output, const std::vector<OutlineIt
         if (item->hasKids() && item->getKids()) {
             newXmlOutlineLevel(output, item->getKids());
         }
-        item->close();
     }
 
     fputs("</outline>\n", output);

@@ -17,15 +17,15 @@
 // Copyright (C) 2006, 2007 Jeff Muizelaar <jeff@infidigm.net>
 // Copyright (C) 2006 Carlos Garcia Campos <carlosgc@gnome.org>
 // Copyright (C) 2009 Koji Otani <sho@bbr.jp>
-// Copyright (C) 2009-2011, 2013, 2016-2020 Albert Astals Cid <aacid@kde.org>
+// Copyright (C) 2009-2011, 2013, 2016-2021 Albert Astals Cid <aacid@kde.org>
 // Copyright (C) 2010 Christian Feuersänger <cfeuersaenger@googlemail.com>
 // Copyright (C) 2011 Andrea Canciani <ranma42@gmail.com>
-// Copyright (C) 2011-2014, 2016 Thomas Freitag <Thomas.Freitag@alfa.de>
+// Copyright (C) 2011-2014, 2016, 2020 Thomas Freitag <Thomas.Freitag@alfa.de>
 // Copyright (C) 2013 Lu Wang <coolwanglu@gmail.com>
 // Copyright (C) 2015, 2017, 2020 Adrian Johnson <ajohnson@redneon.com>
 // Copyright (C) 2017, 2019 Oliver Sander <oliver.sander@tu-dresden.de>
 // Copyright (C) 2018 Adam Reichold <adam.reichold@t-online.de>
-// Copyright (C) 2020 Philipp Knechtges <philipp-dev@knechtges.com>
+// Copyright (C) 2020, 2021 Philipp Knechtges <philipp-dev@knechtges.com>
 //
 // To see a description of the changes please see the Changelog file that
 // came with your tarball or type make ChangeLog if you are building from git
@@ -36,6 +36,7 @@
 #define GFXSTATE_H
 
 #include "poppler-config.h"
+#include "poppler_private_export.h"
 
 #include "Object.h"
 #include "Function.h"
@@ -216,7 +217,7 @@ enum GfxColorSpaceMode
 typedef std::shared_ptr<void> GfxLCMSProfilePtr;
 
 #ifdef USE_CMS
-GfxLCMSProfilePtr make_GfxLCMSProfilePtr(void *profile);
+GfxLCMSProfilePtr POPPLER_PRIVATE_EXPORT make_GfxLCMSProfilePtr(void *profile);
 #endif
 
 // wrapper of cmsHTRANSFORM to copy
@@ -241,7 +242,7 @@ private:
     unsigned int transformPixelType;
 };
 
-class GfxColorSpace
+class POPPLER_PRIVATE_EXPORT GfxColorSpace
 {
 public:
     GfxColorSpace();
@@ -270,6 +271,7 @@ public:
 
     // create mapping for spot colorants
     virtual void createMapping(std::vector<GfxSeparationColorSpace *> *separationList, int maxSepComps);
+    int *getMapping() const { return mapping; }
 
     // Does this ColorSpace support getRGBLine?
     virtual bool useGetRGBLine() const { return false; }
@@ -312,7 +314,7 @@ protected:
 // GfxDeviceGrayColorSpace
 //------------------------------------------------------------------------
 
-class GfxDeviceGrayColorSpace : public GfxColorSpace
+class POPPLER_PRIVATE_EXPORT GfxDeviceGrayColorSpace : public GfxColorSpace
 {
 public:
     GfxDeviceGrayColorSpace();
@@ -378,7 +380,6 @@ private:
     double whiteX, whiteY, whiteZ; // white point
     double blackX, blackY, blackZ; // black point
     double gamma; // gamma value
-    double kr, kg, kb; // gamut mapping mulitpliers
     void getXYZ(const GfxColor *color, double *pX, double *pY, double *pZ) const;
 #ifdef USE_CMS
     std::shared_ptr<GfxColorTransform> transform;
@@ -389,7 +390,7 @@ private:
 // GfxDeviceRGBColorSpace
 //------------------------------------------------------------------------
 
-class GfxDeviceRGBColorSpace : public GfxColorSpace
+class POPPLER_PRIVATE_EXPORT GfxDeviceRGBColorSpace : public GfxColorSpace
 {
 public:
     GfxDeviceRGBColorSpace();
@@ -459,7 +460,6 @@ private:
     double blackX, blackY, blackZ; // black point
     double gammaR, gammaG, gammaB; // gamma values
     double mat[9]; // ABC -> XYZ transform matrix
-    double kr, kg, kb; // gamut mapping mulitpliers
     void getXYZ(const GfxColor *color, double *pX, double *pY, double *pZ) const;
 #ifdef USE_CMS
     std::shared_ptr<GfxColorTransform> transform;
@@ -470,7 +470,7 @@ private:
 // GfxDeviceCMYKColorSpace
 //------------------------------------------------------------------------
 
-class GfxDeviceCMYKColorSpace : public GfxColorSpace
+class POPPLER_PRIVATE_EXPORT GfxDeviceCMYKColorSpace : public GfxColorSpace
 {
 public:
     GfxDeviceCMYKColorSpace();
@@ -538,7 +538,6 @@ private:
     double whiteX, whiteY, whiteZ; // white point
     double blackX, blackY, blackZ; // black point
     double aMin, aMax, bMin, bMax; // range for the a and b components
-    double kr, kg, kb; // gamut mapping mulitpliers
     void getXYZ(const GfxColor *color, double *pX, double *pY, double *pZ) const;
 #ifdef USE_CMS
     std::shared_ptr<GfxColorTransform> transform;
@@ -549,7 +548,7 @@ private:
 // GfxICCBasedColorSpace
 //------------------------------------------------------------------------
 
-class GfxICCBasedColorSpace : public GfxColorSpace
+class POPPLER_PRIVATE_EXPORT GfxICCBasedColorSpace : public GfxColorSpace
 {
 public:
     GfxICCBasedColorSpace(int nCompsA, GfxColorSpace *altA, const Ref *iccProfileStreamA);
@@ -584,6 +583,8 @@ public:
     Ref getRef() { return iccProfileStream; }
 #ifdef USE_CMS
     char *getPostScriptCSA();
+    void buildTransforms(GfxState *state);
+    void setProfile(GfxLCMSProfilePtr &profileA) { profile = profileA; }
     GfxLCMSProfilePtr getProfile() { return profile; }
 #endif
 
@@ -741,7 +742,7 @@ private:
 class GfxPatternColorSpace : public GfxColorSpace
 {
 public:
-    GfxPatternColorSpace(GfxColorSpace *underA);
+    explicit GfxPatternColorSpace(GfxColorSpace *underA);
     ~GfxPatternColorSpace() override;
     GfxColorSpace *copy() const override;
     GfxColorSpaceMode getMode() const override { return csPattern; }
@@ -853,8 +854,8 @@ private:
 class GfxShading
 {
 public:
-    GfxShading(int typeA);
-    GfxShading(const GfxShading *shading);
+    explicit GfxShading(int typeA);
+    explicit GfxShading(const GfxShading *shading);
     virtual ~GfxShading();
 
     GfxShading(const GfxShading &) = delete;
@@ -878,7 +879,7 @@ public:
     bool getHasBBox() const { return hasBBox; }
 
 protected:
-    bool init(GfxResources *res, Dict *dict, OutputDev *out, GfxState *state);
+    virtual bool init(GfxResources *res, Dict *dict, OutputDev *out, GfxState *state);
 
     // 1: Function-based shading
     // 2: Axial shading
@@ -899,11 +900,11 @@ protected:
 // GfxUnivariateShading
 //------------------------------------------------------------------------
 
-class GfxUnivariateShading : public GfxShading
+class POPPLER_PRIVATE_EXPORT GfxUnivariateShading : public GfxShading
 {
 public:
     GfxUnivariateShading(int typeA, double t0A, double t1A, std::vector<std::unique_ptr<Function>> &&funcsA, bool extend0A, bool extend1A);
-    GfxUnivariateShading(const GfxUnivariateShading *shading);
+    explicit GfxUnivariateShading(const GfxUnivariateShading *shading);
     ~GfxUnivariateShading() override;
 
     double getDomain0() const { return t0; }
@@ -922,6 +923,9 @@ public:
 
     virtual double getDistance(double sMin, double sMax) const = 0;
 
+protected:
+    bool init(GfxResources *res, Dict *dict, OutputDev *out, GfxState *state) override;
+
 private:
     double t0, t1;
     std::vector<std::unique_ptr<Function>> funcs;
@@ -937,11 +941,11 @@ private:
 // GfxFunctionShading
 //------------------------------------------------------------------------
 
-class GfxFunctionShading : public GfxShading
+class POPPLER_PRIVATE_EXPORT GfxFunctionShading : public GfxShading
 {
 public:
     GfxFunctionShading(double x0A, double y0A, double x1A, double y1A, const double *matrixA, std::vector<std::unique_ptr<Function>> &&funcsA);
-    GfxFunctionShading(const GfxFunctionShading *shading);
+    explicit GfxFunctionShading(const GfxFunctionShading *shading);
     ~GfxFunctionShading() override;
 
     static GfxFunctionShading *parse(GfxResources *res, Dict *dict, OutputDev *out, GfxState *state);
@@ -960,6 +964,9 @@ public:
     const Function *getFunc(int i) const { return funcs[i].get(); }
     void getColor(double x, double y, GfxColor *color) const;
 
+protected:
+    bool init(GfxResources *res, Dict *dict, OutputDev *out, GfxState *state) override;
+
 private:
     double x0, y0, x1, y1;
     double matrix[6];
@@ -974,7 +981,7 @@ class GfxAxialShading : public GfxUnivariateShading
 {
 public:
     GfxAxialShading(double x0A, double y0A, double x1A, double y1A, double t0A, double t1A, std::vector<std::unique_ptr<Function>> &&funcsA, bool extend0A, bool extend1A);
-    GfxAxialShading(const GfxAxialShading *shading);
+    explicit GfxAxialShading(const GfxAxialShading *shading);
     ~GfxAxialShading() override;
 
     static GfxAxialShading *parse(GfxResources *res, Dict *dict, OutputDev *out, GfxState *state);
@@ -1005,7 +1012,7 @@ class GfxRadialShading : public GfxUnivariateShading
 {
 public:
     GfxRadialShading(double x0A, double y0A, double r0A, double x1A, double y1A, double r1A, double t0A, double t1A, std::vector<std::unique_ptr<Function>> &&funcsA, bool extend0A, bool extend1A);
-    GfxRadialShading(const GfxRadialShading *shading);
+    explicit GfxRadialShading(const GfxRadialShading *shading);
     ~GfxRadialShading() override;
 
     static GfxRadialShading *parse(GfxResources *res, Dict *dict, OutputDev *out, GfxState *state);
@@ -1040,11 +1047,11 @@ struct GfxGouraudVertex
     GfxColor color;
 };
 
-class GfxGouraudTriangleShading : public GfxShading
+class POPPLER_PRIVATE_EXPORT GfxGouraudTriangleShading : public GfxShading
 {
 public:
     GfxGouraudTriangleShading(int typeA, GfxGouraudVertex *verticesA, int nVerticesA, int (*trianglesA)[3], int nTrianglesA, std::vector<std::unique_ptr<Function>> &&funcsA);
-    GfxGouraudTriangleShading(const GfxGouraudTriangleShading *shading);
+    explicit GfxGouraudTriangleShading(const GfxGouraudTriangleShading *shading);
     ~GfxGouraudTriangleShading() override;
 
     static GfxGouraudTriangleShading *parse(GfxResources *res, int typeA, Dict *dict, Stream *str, OutputDev *out, GfxState *state);
@@ -1086,6 +1093,9 @@ public:
     void getTriangle(int i, double *x0, double *y0, double *color0, double *x1, double *y1, double *color1, double *x2, double *y2, double *color2);
 
     void getParameterizedColor(double t, GfxColor *color) const;
+
+protected:
+    bool init(GfxResources *res, Dict *dict, OutputDev *out, GfxState *state) override;
 
 private:
     GfxGouraudVertex *vertices;
@@ -1129,11 +1139,11 @@ struct GfxPatch
     ColorValue color[2][2];
 };
 
-class GfxPatchMeshShading : public GfxShading
+class POPPLER_PRIVATE_EXPORT GfxPatchMeshShading : public GfxShading
 {
 public:
     GfxPatchMeshShading(int typeA, GfxPatch *patchesA, int nPatchesA, std::vector<std::unique_ptr<Function>> &&funcsA);
-    GfxPatchMeshShading(const GfxPatchMeshShading *shading);
+    explicit GfxPatchMeshShading(const GfxPatchMeshShading *shading);
     ~GfxPatchMeshShading() override;
 
     static GfxPatchMeshShading *parse(GfxResources *res, int typeA, Dict *dict, Stream *str, OutputDev *out, GfxState *state);
@@ -1165,6 +1175,9 @@ public:
 
     void getParameterizedColor(double t, GfxColor *color) const;
 
+protected:
+    bool init(GfxResources *res, Dict *dict, OutputDev *out, GfxState *state) override;
+
 private:
     GfxPatch *patches;
     int nPatches;
@@ -1175,7 +1188,7 @@ private:
 // GfxImageColorMap
 //------------------------------------------------------------------------
 
-class GfxImageColorMap
+class POPPLER_PRIVATE_EXPORT GfxImageColorMap
 {
 public:
     // Constructor.
@@ -1230,7 +1243,7 @@ public:
     const GfxColor *getMatteColor() const { return (useMatte) ? &matteColor : nullptr; }
 
 private:
-    GfxImageColorMap(const GfxImageColorMap *colorMap);
+    explicit GfxImageColorMap(const GfxImageColorMap *colorMap);
 
     GfxColorSpace *colorSpace; // the image color space
     int bits; // bits per component
@@ -1304,10 +1317,10 @@ private:
     int size; // size of x/y arrays
     bool closed; // set if path is closed
 
-    GfxSubpath(const GfxSubpath *subpath);
+    explicit GfxSubpath(const GfxSubpath *subpath);
 };
 
-class GfxPath
+class POPPLER_PRIVATE_EXPORT GfxPath
 {
 public:
     // Constructor.
@@ -1369,7 +1382,7 @@ private:
 // GfxState
 //------------------------------------------------------------------------
 
-class GfxState
+class POPPLER_PRIVATE_EXPORT GfxState
 {
 public:
     /**
@@ -1394,7 +1407,7 @@ public:
          * sure the path's memory structure is not changed during the
          * lifetime of the ReusablePathIterator.
          */
-        ReusablePathIterator(GfxPath *path);
+        explicit ReusablePathIterator(GfxPath *path);
 
         /**
          * Returns true if and only if the current iterator position is
@@ -1598,6 +1611,36 @@ public:
     static GfxLCMSProfilePtr sRGBProfile;
 #endif
 
+    void setDefaultGrayColorSpace(GfxColorSpace *cs) { defaultGrayColorSpace = cs; }
+
+    void setDefaultRGBColorSpace(GfxColorSpace *cs) { defaultRGBColorSpace = cs; }
+
+    void setDefaultCMYKColorSpace(GfxColorSpace *cs) { defaultCMYKColorSpace = cs; }
+
+    GfxColorSpace *copyDefaultGrayColorSpace()
+    {
+        if (defaultGrayColorSpace) {
+            return defaultGrayColorSpace->copy();
+        }
+        return new GfxDeviceGrayColorSpace();
+    }
+
+    GfxColorSpace *copyDefaultRGBColorSpace()
+    {
+        if (defaultRGBColorSpace) {
+            return defaultRGBColorSpace->copy();
+        }
+        return new GfxDeviceRGBColorSpace();
+    }
+
+    GfxColorSpace *copyDefaultCMYKColorSpace()
+    {
+        if (defaultCMYKColorSpace) {
+            return defaultCMYKColorSpace->copy();
+        }
+        return new GfxDeviceCMYKColorSpace();
+    }
+
     // Add to path.
     void moveTo(double x, double y) { path->moveTo(curX = x, curY = y); }
     void lineTo(double x, double y) { path->lineTo(curX = x, curY = y); }
@@ -1707,6 +1750,10 @@ private:
     std::shared_ptr<GfxColorTransform> XYZ2DisplayTransformPerc;
     static GfxLCMSProfilePtr XYZProfile;
 #endif
+
+    GfxColorSpace *defaultGrayColorSpace;
+    GfxColorSpace *defaultRGBColorSpace;
+    GfxColorSpace *defaultCMYKColorSpace;
 };
 
 #endif

@@ -1,7 +1,7 @@
 /* poppler-document.cc: qt interface to poppler
  * Copyright (C) 2005, Net Integration Technologies, Inc.
  * Copyright (C) 2005, 2008, Brad Hards <bradh@frogmouth.net>
- * Copyright (C) 2005-2010, 2012, 2013, 2015, 2017-2020, Albert Astals Cid <aacid@kde.org>
+ * Copyright (C) 2005-2010, 2012, 2013, 2015, 2017-2021, Albert Astals Cid <aacid@kde.org>
  * Copyright (C) 2006-2010, Pino Toscano <pino@kde.org>
  * Copyright (C) 2010, 2011 Hib Eris <hib@hiberis.nl>
  * Copyright (C) 2012 Koji Otani <sho@bbr.jp>
@@ -10,12 +10,16 @@
  * Copyright (C) 2014, 2018, 2020 Adam Reichold <adam.reichold@t-online.de>
  * Copyright (C) 2015 William Bader <williambader@hotmail.com>
  * Copyright (C) 2016 Jakub Alba <jakubalba@gmail.com>
- * Copyright (C) 2017 Adrian Johnson <ajohnson@redneon.com>
+ * Copyright (C) 2017, 2021 Adrian Johnson <ajohnson@redneon.com>
  * Copyright (C) 2017 Suzuki Toshiya <mpsuzuki@hiroshima-u.ac.jp>
  * Copyright (C) 2018 Klarälvdalens Datakonsult AB, a KDAB Group company, <info@kdab.com>. Work sponsored by the LiMux project of the city of Munich
- * Copyright (C) 2019 Oliver Sander <oliver.sander@tu-dresden.de>
+ * Copyright (C) 2019-2021 Oliver Sander <oliver.sander@tu-dresden.de>
  * Copyright (C) 2019 Alexander Volkov <a.volkov@rusbitech.ru>
  * Copyright (C) 2020 Philipp Knechtges <philipp-dev@knechtges.com>
+ * Copyright (C) 2020 Katarina Behrens <Katarina.Behrens@cib.de>
+ * Copyright (C) 2020 Thorsten Behrens <Thorsten.Behrens@CIB.de>
+ * Copyright (C) 2021 Mahmoud Khalil <mahmoudkhalil11@gmail.com>
+ * Copyright (C) 2021 Hubert Figuiere <hub@figuiere.net>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -35,6 +39,7 @@
 #include "poppler-qt6.h"
 
 #include <config.h>
+#include <poppler-config.h>
 #include <ErrorCodes.h>
 #include <GlobalParams.h>
 #include <Outline.h>
@@ -60,30 +65,29 @@
 
 namespace Poppler {
 
-Document *Document::load(const QString &filePath, const QByteArray &ownerPassword, const QByteArray &userPassword)
+std::unique_ptr<Document> Document::load(const QString &filePath, const QByteArray &ownerPassword, const QByteArray &userPassword)
 {
     DocumentData *doc = new DocumentData(filePath, new GooString(ownerPassword.data()), new GooString(userPassword.data()));
     return DocumentData::checkDocument(doc);
 }
 
-Document *Document::load(QIODevice *device, const QByteArray &ownerPassword, const QByteArray &userPassword)
+std::unique_ptr<Document> Document::load(QIODevice *device, const QByteArray &ownerPassword, const QByteArray &userPassword)
 {
     DocumentData *doc = new DocumentData(device, new GooString(ownerPassword.data()), new GooString(userPassword.data()));
     return DocumentData::checkDocument(doc);
 }
 
-Document *Document::loadFromData(const QByteArray &fileContents, const QByteArray &ownerPassword, const QByteArray &userPassword)
+std::unique_ptr<Document> Document::loadFromData(const QByteArray &fileContents, const QByteArray &ownerPassword, const QByteArray &userPassword)
 {
     // create stream
     DocumentData *doc = new DocumentData(fileContents, new GooString(ownerPassword.data()), new GooString(userPassword.data()));
     return DocumentData::checkDocument(doc);
 }
 
-Document *DocumentData::checkDocument(DocumentData *doc)
+std::unique_ptr<Document> DocumentData::checkDocument(DocumentData *doc)
 {
-    Document *pdoc;
     if (doc->doc->isOk() || doc->doc->getErrorCode() == errEncrypted) {
-        pdoc = new Document(doc);
+        auto pdoc = std::unique_ptr<Document>(new Document(doc));
         if (doc->doc->getErrorCode() == errEncrypted)
             pdoc->m_doc->locked = true;
         else {
@@ -107,12 +111,12 @@ Document::~Document()
     delete m_doc;
 }
 
-Page *Document::page(int index) const
+std::unique_ptr<Page> Document::page(int index) const
 {
-    Page *page = new Page(m_doc, index);
+    // Cannot call std::make_unique, because the constructor of Page is private
+    auto page = std::unique_ptr<Page>(new Page(m_doc, index));
     if (page->m_page->page == nullptr) {
-        delete page;
-        return nullptr;
+        page.reset();
     }
 
     return page;
@@ -224,9 +228,10 @@ QList<EmbeddedFile *> Document::embeddedFiles() const
     return m_doc->m_embeddedFiles;
 }
 
-FontIterator *Document::newFontIterator(int startPage) const
+std::unique_ptr<FontIterator> Document::newFontIterator(int startPage) const
 {
-    return new FontIterator(startPage, m_doc);
+    // Cannot use std::make_unique, because the FontIterator constructor is private
+    return std::unique_ptr<FontIterator>(new FontIterator(startPage, m_doc));
 }
 
 QByteArray Document::fontData(const FontInfo &fi) const
@@ -256,8 +261,8 @@ QString Document::info(const QString &type) const
         return QString();
     }
 
-    QScopedPointer<GooString> goo(m_doc->doc->getDocInfoStringEntry(type.toLatin1().constData()));
-    return UnicodeParsedString(goo.data());
+    std::unique_ptr<GooString> goo(m_doc->doc->getDocInfoStringEntry(type.toLatin1().constData()));
+    return UnicodeParsedString(goo.get());
 }
 
 bool Document::setInfo(const QString &key, const QString &val)
@@ -277,8 +282,8 @@ QString Document::title() const
         return QString();
     }
 
-    QScopedPointer<GooString> goo(m_doc->doc->getDocInfoTitle());
-    return UnicodeParsedString(goo.data());
+    std::unique_ptr<GooString> goo(m_doc->doc->getDocInfoTitle());
+    return UnicodeParsedString(goo.get());
 }
 
 bool Document::setTitle(const QString &val)
@@ -297,8 +302,8 @@ QString Document::author() const
         return QString();
     }
 
-    QScopedPointer<GooString> goo(m_doc->doc->getDocInfoAuthor());
-    return UnicodeParsedString(goo.data());
+    std::unique_ptr<GooString> goo(m_doc->doc->getDocInfoAuthor());
+    return UnicodeParsedString(goo.get());
 }
 
 bool Document::setAuthor(const QString &val)
@@ -317,8 +322,8 @@ QString Document::subject() const
         return QString();
     }
 
-    QScopedPointer<GooString> goo(m_doc->doc->getDocInfoSubject());
-    return UnicodeParsedString(goo.data());
+    std::unique_ptr<GooString> goo(m_doc->doc->getDocInfoSubject());
+    return UnicodeParsedString(goo.get());
 }
 
 bool Document::setSubject(const QString &val)
@@ -337,8 +342,8 @@ QString Document::keywords() const
         return QString();
     }
 
-    QScopedPointer<GooString> goo(m_doc->doc->getDocInfoKeywords());
-    return UnicodeParsedString(goo.data());
+    std::unique_ptr<GooString> goo(m_doc->doc->getDocInfoKeywords());
+    return UnicodeParsedString(goo.get());
 }
 
 bool Document::setKeywords(const QString &val)
@@ -357,8 +362,8 @@ QString Document::creator() const
         return QString();
     }
 
-    QScopedPointer<GooString> goo(m_doc->doc->getDocInfoCreator());
-    return UnicodeParsedString(goo.data());
+    std::unique_ptr<GooString> goo(m_doc->doc->getDocInfoCreator());
+    return UnicodeParsedString(goo.get());
 }
 
 bool Document::setCreator(const QString &val)
@@ -377,8 +382,8 @@ QString Document::producer() const
         return QString();
     }
 
-    QScopedPointer<GooString> goo(m_doc->doc->getDocInfoProducer());
-    return UnicodeParsedString(goo.data());
+    std::unique_ptr<GooString> goo(m_doc->doc->getDocInfoProducer());
+    return UnicodeParsedString(goo.get());
 }
 
 bool Document::setProducer(const QString &val)
@@ -431,8 +436,8 @@ QDateTime Document::date(const QString &type) const
         return QDateTime();
     }
 
-    QScopedPointer<GooString> goo(m_doc->doc->getDocInfoStringEntry(type.toLatin1().constData()));
-    QString str = UnicodeParsedString(goo.data());
+    std::unique_ptr<GooString> goo(m_doc->doc->getDocInfoStringEntry(type.toLatin1().constData()));
+    QString str = UnicodeParsedString(goo.get());
     return Poppler::convertDate(str.toLatin1().constData());
 }
 
@@ -452,8 +457,8 @@ QDateTime Document::creationDate() const
         return QDateTime();
     }
 
-    QScopedPointer<GooString> goo(m_doc->doc->getDocInfoCreatDate());
-    QString str = UnicodeParsedString(goo.data());
+    std::unique_ptr<GooString> goo(m_doc->doc->getDocInfoCreatDate());
+    QString str = UnicodeParsedString(goo.get());
     return Poppler::convertDate(str.toLatin1().constData());
 }
 
@@ -473,8 +478,8 @@ QDateTime Document::modificationDate() const
         return QDateTime();
     }
 
-    QScopedPointer<GooString> goo(m_doc->doc->getDocInfoModDate());
-    QString str = UnicodeParsedString(goo.data());
+    std::unique_ptr<GooString> goo(m_doc->doc->getDocInfoModDate());
+    QString str = UnicodeParsedString(goo.get());
     return Poppler::convertDate(str.toLatin1().constData());
 }
 
@@ -543,15 +548,12 @@ bool Document::okToAssemble() const
     return m_doc->doc->okToAssemble();
 }
 
-void Document::getPdfVersion(int *major, int *minor) const
+Document::PdfVersion Document::getPdfVersion() const
 {
-    if (major)
-        *major = m_doc->doc->getPDFMajorVersion();
-    if (minor)
-        *minor = m_doc->doc->getPDFMinorVersion();
+    return PdfVersion { m_doc->doc->getPDFMajorVersion(), m_doc->doc->getPDFMinorVersion() };
 }
 
-Page *Document::page(const QString &label) const
+std::unique_ptr<Page> Document::page(const QString &label) const
 {
     GooString label_g(label.toLatin1().data());
     int index;
@@ -586,11 +588,11 @@ QVector<OutlineItem> Document::outline() const
     return result;
 }
 
-LinkDestination *Document::linkDestination(const QString &name)
+std::unique_ptr<LinkDestination> Document::linkDestination(const QString &name)
 {
     GooString *namedDest = QStringToGooString(name);
     LinkDestinationData ldd(nullptr, namedDest, m_doc, false);
-    LinkDestination *ld = new LinkDestination(ldd);
+    auto ld = std::make_unique<LinkDestination>(ldd);
     delete namedDest;
     return ld;
 }
@@ -657,7 +659,7 @@ QColor Document::paperColor() const
 void Document::setRenderBackend(Document::RenderBackend backend)
 {
     // no need to delete the outputdev as for the moment we always create a splash one
-    // as the arthur one does not allow "precaching" due to it's signature
+    // as the QPainter one does not allow "precaching" due to its signature
     // delete m_doc->m_outputDev;
     // m_doc->m_outputDev = NULL;
     m_doc->m_backend = backend;
@@ -671,10 +673,8 @@ Document::RenderBackend Document::renderBackend() const
 QSet<Document::RenderBackend> Document::availableRenderBackends()
 {
     QSet<Document::RenderBackend> ret;
-#if defined(HAVE_SPLASH)
     ret << Document::SplashBackend;
-#endif
-    ret << Document::ArthurBackend;
+    ret << Document::QPainterBackend;
     return ret;
 }
 
@@ -697,14 +697,16 @@ Document::RenderHints Document::renderHints() const
     return Document::RenderHints(m_doc->m_hints);
 }
 
-PSConverter *Document::psConverter() const
+std::unique_ptr<PSConverter> Document::psConverter() const
 {
-    return new PSConverter(m_doc);
+    // Cannot use std::make_unique, because the PSConverter constructor is private
+    return std::unique_ptr<PSConverter>(new PSConverter(m_doc));
 }
 
-PDFConverter *Document::pdfConverter() const
+std::unique_ptr<PDFConverter> Document::pdfConverter() const
 {
-    return new PDFConverter(m_doc);
+    // Cannot use std::make_unique, because the PDFConverter constructor is private
+    return std::unique_ptr<PDFConverter>(new PDFConverter(m_doc));
 }
 
 QString Document::metadata() const
@@ -712,10 +714,9 @@ QString Document::metadata() const
     QString result;
     Catalog *catalog = m_doc->doc->getCatalog();
     if (catalog && catalog->isOk()) {
-        GooString *s = catalog->readMetadata();
+        std::unique_ptr<GooString> s = catalog->readMetadata();
         if (s)
-            result = UnicodeParsedString(s);
-        delete s;
+            result = UnicodeParsedString(s.get());
     }
     return result;
 }
@@ -780,9 +781,12 @@ Document::FormType Document::formType() const
 
 QVector<int> Document::formCalculateOrder() const
 {
-    QVector<int> result;
-
     Form *form = m_doc->doc->getCatalog()->getForm();
+    if (!form) {
+        return {};
+    }
+
+    QVector<int> result;
     const std::vector<Ref> &calculateOrder = form->getCalculateOrder();
     for (Ref r : calculateOrder) {
         FormWidget *w = form->findWidgetByRef(r);
@@ -794,19 +798,29 @@ QVector<int> Document::formCalculateOrder() const
     return result;
 }
 
-QVector<FormFieldSignature *> Document::signatures() const
+std::vector<std::unique_ptr<FormFieldSignature>> Document::signatures() const
 {
-    QVector<FormFieldSignature *> result;
+    std::vector<std::unique_ptr<FormFieldSignature>> result;
 
     const std::vector<::FormFieldSignature *> pSignatures = m_doc->doc->getSignatureFields();
 
     for (::FormFieldSignature *pSignature : pSignatures) {
-        ::FormWidget *fw = pSignature->getWidget(0);
+        ::FormWidget *fw = pSignature->getCreateWidget();
         ::Page *p = m_doc->doc->getPage(fw->getWidgetAnnotation()->getPageNum());
-        result.append(new FormFieldSignature(m_doc, p, static_cast<FormWidgetSignature *>(fw)));
+        result.push_back(std::make_unique<FormFieldSignature>(m_doc, p, static_cast<FormWidgetSignature *>(fw)));
     }
 
     return result;
+}
+
+bool Document::xrefWasReconstructed() const
+{
+    return m_doc->xrefReconstructed;
+}
+
+void Document::setXRefReconstructedCallback(const std::function<void()> &callback)
+{
+    m_doc->xrefReconstructedCallback = callback;
 }
 
 QDateTime convertDate(const char *dateString)
@@ -814,7 +828,8 @@ QDateTime convertDate(const char *dateString)
     int year, mon, day, hour, min, sec, tzHours, tzMins;
     char tz;
 
-    if (parseDateString(dateString, &year, &mon, &day, &hour, &min, &sec, &tz, &tzHours, &tzMins)) {
+    GooString date(dateString);
+    if (parseDateString(&date, &year, &mon, &day, &hour, &min, &sec, &tz, &tzHours, &tzMins)) {
         QDate d(year, mon, day);
         QTime t(hour, min, sec);
         if (d.isValid() && t.isValid()) {

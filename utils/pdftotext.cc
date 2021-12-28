@@ -16,7 +16,7 @@
 // under GPL version 2 or later
 //
 // Copyright (C) 2006 Dominic Lachowicz <cinamod@hotmail.com>
-// Copyright (C) 2007-2008, 2010, 2011, 2017-2020 Albert Astals Cid <aacid@kde.org>
+// Copyright (C) 2007-2008, 2010, 2011, 2017-2021 Albert Astals Cid <aacid@kde.org>
 // Copyright (C) 2009 Jan Jockusch <jan@jockusch.de>
 // Copyright (C) 2010, 2013 Hib Eris <hib@hiberis.nl>
 // Copyright (C) 2010 Kenneth Berland <ken@hero.com>
@@ -30,7 +30,8 @@
 // Copyright (C) 2018 Adam Reichold <adam.reichold@t-online.de>
 // Copyright (C) 2018 Sanchit Anand <sanxchit@gmail.com>
 // Copyright (C) 2019 Dan Shea <dan.shea@logical-innovations.com>
-// Copyright (C) 2019 Oliver Sander <oliver.sander@tu-dresden.de>
+// Copyright (C) 2019, 2021 Oliver Sander <oliver.sander@tu-dresden.de>
+// Copyright (C) 2021 William Bader <williambader@hotmail.com>
 //
 // To see a description of the changes please see the Changelog file that
 // came with your tarball or type make ChangeLog if you are building from git
@@ -82,6 +83,8 @@ static int h = 0;
 static bool bbox = false;
 static bool bboxLayout = false;
 static bool physLayout = false;
+static bool useCropBox = false;
+static double colspacing = TextOutputDev::minColSpacing1_default;
 static double fixedPitch = 0;
 static bool rawOrder = false;
 static bool discardDiag = false;
@@ -114,6 +117,9 @@ static const ArgDesc argDesc[] = { { "-f", argInt, &firstPage, 0, "first page to
                                    { "-nopgbrk", argFlag, &noPageBreaks, 0, "don't insert page breaks between pages" },
                                    { "-bbox", argFlag, &bbox, 0, "output bounding box for each word and page size to html.  Sets -htmlmeta" },
                                    { "-bbox-layout", argFlag, &bboxLayout, 0, "like -bbox but with extra layout bounding box data.  Sets -htmlmeta" },
+                                   { "-cropbox", argFlag, &useCropBox, 0, "use the crop box rather than media box" },
+                                   { "-colspacing", argFP, &colspacing, 0,
+                                     "how much spacing we allow after a word before considering adjacent text to be a new column, as a fraction of the font size (default is 0.7, old releases had a 0.3 default)" },
                                    { "-opw", argString, ownerPassword, sizeof(ownerPassword), "owner password (for encrypted files)" },
                                    { "-upw", argString, userPassword, sizeof(userPassword), "user password (for encrypted files)" },
                                    { "-q", argFlag, &quiet, 0, "don't print any messages or errors" },
@@ -152,7 +158,7 @@ static std::string myXmlTokenReplace(const char *inString)
 
 int main(int argc, char *argv[])
 {
-    PDFDoc *doc;
+    std::unique_ptr<PDFDoc> doc;
     GooString *fileName;
     GooString *textFileName;
     GooString *ownerPW, *userPW;
@@ -174,6 +180,10 @@ int main(int argc, char *argv[])
     }
     if (bbox) {
         htmlMeta = true;
+    }
+    if (colspacing <= 0 || colspacing > 10) {
+        error(errCommandLine, -1, "Bogus value provided for -colspacing");
+        goto err1;
     }
     if (!ok || (argc < 2 && !printEnc) || argc > 3 || printVersion || printHelp) {
         fprintf(stderr, "pdftotext version %s\n", PACKAGE_VERSION);
@@ -339,13 +349,14 @@ int main(int argc, char *argv[])
 
         if (textOut->isOk()) {
             textOut->setTextEOL(textEOL);
+            textOut->setMinColSpacing1(colspacing);
             if (noPageBreaks) {
                 textOut->setTextPageBreaks(false);
             }
             if (bboxLayout) {
-                printDocBBox(f, doc, textOut, firstPage, lastPage);
+                printDocBBox(f, doc.get(), textOut, firstPage, lastPage);
             } else {
-                printWordBBox(f, doc, textOut, firstPage, lastPage);
+                printWordBBox(f, doc.get(), textOut, firstPage, lastPage);
             }
         }
         if (f != stdout) {
@@ -355,6 +366,7 @@ int main(int argc, char *argv[])
         textOut = new TextOutputDev(textFileName->c_str(), physLayout, fixedPitch, rawOrder, htmlMeta, discardDiag);
         if (textOut->isOk()) {
             textOut->setTextEOL(textEOL);
+            textOut->setMinColSpacing1(colspacing);
             if (noPageBreaks) {
                 textOut->setTextPageBreaks(false);
             }
@@ -401,7 +413,6 @@ int main(int argc, char *argv[])
 err3:
     delete textFileName;
 err2:
-    delete doc;
     delete fileName;
 err1:
 err0:
@@ -496,8 +507,10 @@ void printDocBBox(FILE *f, PDFDoc *doc, TextOutputDev *textOut, int first, int l
 
     fprintf(f, "<doc>\n");
     for (int page = first; page <= last; ++page) {
-        fprintf(f, "  <page width=\"%f\" height=\"%f\">\n", doc->getPageMediaWidth(page), doc->getPageMediaHeight(page));
-        doc->displayPage(textOut, page, resolution, resolution, 0, true, false, false);
+        const double wid = useCropBox ? doc->getPageCropWidth(page) : doc->getPageMediaWidth(page);
+        const double hgt = useCropBox ? doc->getPageCropHeight(page) : doc->getPageMediaHeight(page);
+        fprintf(f, "  <page width=\"%f\" height=\"%f\">\n", wid, hgt);
+        doc->displayPage(textOut, page, resolution, resolution, 0, !useCropBox, useCropBox, false);
         for (flow = textOut->getFlows(); flow; flow = flow->getNext()) {
             fprintf(f, "    <flow>\n");
             for (blk = flow->getBlocks(); blk; blk = blk->getNext()) {
@@ -519,9 +532,11 @@ void printWordBBox(FILE *f, PDFDoc *doc, TextOutputDev *textOut, int first, int 
 {
     fprintf(f, "<doc>\n");
     for (int page = first; page <= last; ++page) {
-        fprintf(f, "  <page width=\"%f\" height=\"%f\">\n", doc->getPageMediaWidth(page), doc->getPageMediaHeight(page));
-        doc->displayPage(textOut, page, resolution, resolution, 0, true, false, false);
-        TextWordList *wordlist = textOut->makeWordList();
+        double wid = useCropBox ? doc->getPageCropWidth(page) : doc->getPageMediaWidth(page);
+        double hgt = useCropBox ? doc->getPageCropHeight(page) : doc->getPageMediaHeight(page);
+        fprintf(f, "  <page width=\"%f\" height=\"%f\">\n", wid, hgt);
+        doc->displayPage(textOut, page, resolution, resolution, 0, !useCropBox, useCropBox, false);
+        std::unique_ptr<TextWordList> wordlist = textOut->makeWordList();
         const int word_length = wordlist != nullptr ? wordlist->getLength() : 0;
         TextWord *word;
         double xMinA, yMinA, xMaxA, yMaxA;
@@ -535,7 +550,6 @@ void printWordBBox(FILE *f, PDFDoc *doc, TextOutputDev *textOut, int first, int 
             fprintf(f, "    <word xMin=\"%f\" yMin=\"%f\" xMax=\"%f\" yMax=\"%f\">%s</word>\n", xMinA, yMinA, xMaxA, yMaxA, myString.c_str());
         }
         fprintf(f, "  </page>\n");
-        delete wordlist;
     }
     fprintf(f, "</doc>\n");
 }

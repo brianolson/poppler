@@ -1,5 +1,5 @@
 /* poppler-annotation.h: qt interface to poppler
- * Copyright (C) 2006-2008, 2012, 2013, 2018-2020 Albert Astals Cid <aacid@kde.org>
+ * Copyright (C) 2006-2008, 2012, 2013, 2018-2021 Albert Astals Cid <aacid@kde.org>
  * Copyright (C) 2006, 2008 Pino Toscano <pino@kde.org>
  * Copyright (C) 2007, Brad Hards <bradh@frogmouth.net>
  * Copyright (C) 2010, Philip Lorenz <lorenzph+freedesktop@gmail.com>
@@ -8,6 +8,10 @@
  * Copyright (C) 2012, 2013 Fabio D'Urso <fabiodurso@hotmail.it>
  * Copyright (C) 2013, Anthony Granger <grangeranthony@gmail.com>
  * Copyright (C) 2018, Dileep Sankhla <sankhla.dileep96@gmail.com>
+ * Copyright (C) 2020, Katarina Behrens <Katarina.Behrens@cib.de>
+ * Copyright (C) 2020, Klarälvdalens Datakonsult AB, a KDAB Group company, <info@kdab.com>. Work sponsored by Technische Universität Dresden
+ * Copyright (C) 2021, Oliver Sander <oliver.sander@tu-dresden.de>
+ * Copyright (C) 2021, Mahmoud Ahmed Khalil <mahmoudkhalil11@gmail.com>
  * Adapting code from
  *   Copyright (C) 2004 by Enrico Ros <eros.kde@email.it>
  *
@@ -40,10 +44,13 @@
 #include <QtGui/QFont>
 #include "poppler-export.h"
 
+#include <memory>
+
 namespace Poppler {
 
 class Annotation;
 class AnnotationPrivate;
+class AnnotationAppearancePrivate;
 class TextAnnotationPrivate;
 class LineAnnotationPrivate;
 class GeomAnnotationPrivate;
@@ -64,6 +71,31 @@ class SoundObject;
 class MovieObject;
 class LinkRendition;
 class Page;
+
+/**
+ * \short AnnotationAppearance class wrapping Poppler's AP stream object
+ *
+ * The Annotation's Appearance Stream is a Form XObject containing
+ * information required to properly render the Annotation on the document.
+ *
+ * This class wraps Poppler's Object implementing the appearance stream
+ * for the calling annotation. It can be used to preserve the current
+ * Appearance Stream for the calling annotation.
+ *
+ * \since 21.10.0
+ */
+class POPPLER_QT6_EXPORT AnnotationAppearance
+{
+    friend class Annotation;
+
+public:
+    explicit AnnotationAppearance(AnnotationAppearancePrivate *annotationAppearancePrivate);
+    ~AnnotationAppearance();
+
+private:
+    AnnotationAppearancePrivate *d;
+    Q_DISABLE_COPY(AnnotationAppearance)
+};
 
 /**
  * \short Annotation class holding properties shared by all annotations.
@@ -366,16 +398,27 @@ public:
 
     /**
      * Returns the revisions of this annotation
-     *
-     * \note The caller owns the returned annotations and they should
-     *       be deleted when no longer required.
      */
-    QList<Annotation *> revisions() const;
+    std::vector<std::unique_ptr<Annotation>> revisions() const;
 
     /**
      * The type of the annotation.
      */
     virtual SubType subType() const = 0;
+
+    /**
+     * Returns the current appearance stream of this annotation.
+     *
+     * \since 21.10.0
+     */
+    std::unique_ptr<AnnotationAppearance> annotationAppearance() const;
+
+    /**
+     * Sets the annotation's appearance stream with the @p annotationAppearance.
+     *
+     * \since 21.10.0
+     */
+    void setAnnotationAppearance(const AnnotationAppearance &annotationAppearance);
 
     /**
      * Destructor.
@@ -404,7 +447,7 @@ public:
 
 protected:
     /// \cond PRIVATE
-    Annotation(AnnotationPrivate &dd);
+    explicit Annotation(AnnotationPrivate &dd);
     Q_DECLARE_PRIVATE(Annotation)
     QExplicitlySharedDataPointer<AnnotationPrivate> d_ptr;
     /// \endcond
@@ -443,7 +486,7 @@ public:
         InplaceAlignRight
     };
 
-    TextAnnotation(TextType type);
+    explicit TextAnnotation(TextType type);
     ~TextAnnotation() override;
     SubType subType() const override;
 
@@ -489,7 +532,7 @@ public:
     void setInplaceIntent(InplaceIntent intent);
 
 private:
-    TextAnnotation(TextAnnotationPrivate &dd);
+    explicit TextAnnotation(TextAnnotationPrivate &dd);
     void setTextType(TextType type);
     Q_DECLARE_PRIVATE(TextAnnotation)
     Q_DISABLE_COPY(TextAnnotation)
@@ -532,7 +575,7 @@ public:
         PolygonCloud
     };
 
-    LineAnnotation(LineType type);
+    explicit LineAnnotation(LineType type);
     ~LineAnnotation() override;
     SubType subType() const override;
 
@@ -566,7 +609,7 @@ public:
     void setLineIntent(LineIntent intent);
 
 private:
-    LineAnnotation(LineAnnotationPrivate &dd);
+    explicit LineAnnotation(LineAnnotationPrivate &dd);
     void setLineType(LineType type);
     Q_DECLARE_PRIVATE(LineAnnotation)
     Q_DISABLE_COPY(LineAnnotation)
@@ -601,7 +644,7 @@ public:
     void setGeomInnerColor(const QColor &color);
 
 private:
-    GeomAnnotation(GeomAnnotationPrivate &dd);
+    explicit GeomAnnotation(GeomAnnotationPrivate &dd);
     Q_DECLARE_PRIVATE(GeomAnnotation)
     Q_DISABLE_COPY(GeomAnnotation)
 };
@@ -667,7 +710,7 @@ public:
     void setHighlightQuads(const QList<Quad> &quads);
 
 private:
-    HighlightAnnotation(HighlightAnnotationPrivate &dd);
+    explicit HighlightAnnotation(HighlightAnnotationPrivate &dd);
     Q_DECLARE_PRIVATE(HighlightAnnotation)
     Q_DISABLE_COPY(HighlightAnnotation)
 };
@@ -714,8 +757,15 @@ public:
     */
     void setStampIconName(const QString &name);
 
+    /**
+       Set a custom icon for this stamp annotation.
+
+       \since 21.10.0
+    */
+    void setStampCustomImage(const QImage &image);
+
 private:
-    StampAnnotation(StampAnnotationPrivate &dd);
+    explicit StampAnnotation(StampAnnotationPrivate &dd);
     Q_DECLARE_PRIVATE(StampAnnotation)
     Q_DISABLE_COPY(StampAnnotation)
 };
@@ -738,7 +788,7 @@ public:
     void setInkPaths(const QList<QVector<QPointF>> &paths);
 
 private:
-    InkAnnotation(InkAnnotationPrivate &dd);
+    explicit InkAnnotation(InkAnnotationPrivate &dd);
     Q_DECLARE_PRIVATE(InkAnnotation)
     Q_DISABLE_COPY(InkAnnotation)
 };
@@ -761,7 +811,7 @@ public:
     };
 
     Link *linkDestination() const;
-    void setLinkDestination(Link *link);
+    void setLinkDestination(std::unique_ptr<Link> &&link);
 
     HighlightMode linkHighlightMode() const;
     void setLinkHighlightMode(HighlightMode mode);
@@ -771,7 +821,7 @@ public:
 
 private:
     LinkAnnotation();
-    LinkAnnotation(LinkAnnotationPrivate &dd);
+    explicit LinkAnnotation(LinkAnnotationPrivate &dd);
     Q_DECLARE_PRIVATE(LinkAnnotation)
     Q_DISABLE_COPY(LinkAnnotation)
 };
@@ -803,7 +853,7 @@ public:
     void setCaretSymbol(CaretSymbol symbol);
 
 private:
-    CaretAnnotation(CaretAnnotationPrivate &dd);
+    explicit CaretAnnotation(CaretAnnotationPrivate &dd);
     Q_DECLARE_PRIVATE(CaretAnnotation)
     Q_DISABLE_COPY(CaretAnnotation)
 };
@@ -843,7 +893,7 @@ public:
 
 private:
     FileAttachmentAnnotation();
-    FileAttachmentAnnotation(FileAttachmentAnnotationPrivate &dd);
+    explicit FileAttachmentAnnotation(FileAttachmentAnnotationPrivate &dd);
     Q_DECLARE_PRIVATE(FileAttachmentAnnotation)
     Q_DISABLE_COPY(FileAttachmentAnnotation)
 };
@@ -883,7 +933,7 @@ public:
 
 private:
     SoundAnnotation();
-    SoundAnnotation(SoundAnnotationPrivate &dd);
+    explicit SoundAnnotation(SoundAnnotationPrivate &dd);
     Q_DECLARE_PRIVATE(SoundAnnotation)
     Q_DISABLE_COPY(SoundAnnotation)
 };
@@ -923,7 +973,7 @@ public:
 
 private:
     MovieAnnotation();
-    MovieAnnotation(MovieAnnotationPrivate &dd);
+    explicit MovieAnnotation(MovieAnnotationPrivate &dd);
     Q_DECLARE_PRIVATE(MovieAnnotation)
     Q_DISABLE_COPY(MovieAnnotation)
 };
@@ -965,14 +1015,14 @@ public:
     void setScreenTitle(const QString &title);
 
     /**
-     * Returns the additional action of the given @p type fo the annotation or
+     * Returns the additional action of the given @p type for the annotation or
      * @c 0 if no action has been defined.
      */
-    Link *additionalAction(AdditionalActionType type) const;
+    std::unique_ptr<Link> additionalAction(AdditionalActionType type) const;
 
 private:
     ScreenAnnotation();
-    ScreenAnnotation(ScreenAnnotationPrivate &dd);
+    explicit ScreenAnnotation(ScreenAnnotationPrivate &dd);
     Q_DECLARE_PRIVATE(ScreenAnnotation)
     Q_DISABLE_COPY(ScreenAnnotation)
 };
@@ -995,14 +1045,14 @@ public:
     SubType subType() const override;
 
     /**
-     * Returns the additional action of the given @p type fo the annotation or
+     * Returns the additional action of the given @p type for the annotation or
      * @c 0 if no action has been defined.
      */
-    Link *additionalAction(AdditionalActionType type) const;
+    std::unique_ptr<Link> additionalAction(AdditionalActionType type) const;
 
 private:
     WidgetAnnotation();
-    WidgetAnnotation(WidgetAnnotationPrivate &dd);
+    explicit WidgetAnnotation(WidgetAnnotationPrivate &dd);
     Q_DECLARE_PRIVATE(WidgetAnnotation)
     Q_DISABLE_COPY(WidgetAnnotation)
 };
@@ -1326,7 +1376,7 @@ private:
     void setContent(RichMediaAnnotation::Content *content);
 
     RichMediaAnnotation();
-    RichMediaAnnotation(RichMediaAnnotationPrivate &dd);
+    explicit RichMediaAnnotation(RichMediaAnnotationPrivate &dd);
     Q_DECLARE_PRIVATE(RichMediaAnnotation)
     Q_DISABLE_COPY(RichMediaAnnotation)
 };

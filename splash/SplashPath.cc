@@ -12,7 +12,7 @@
 // under GPL version 2 or later
 //
 // Copyright (C) 2018 Stefan Brüns <stefan.bruens@rwth-aachen.de>
-// Copyright (C) 2018-2020 Albert Astals Cid <aacid@kde.org>
+// Copyright (C) 2018-2021 Albert Astals Cid <aacid@kde.org>
 // Copyright (C) 2018 Adam Reichold <adam.reichold@t-online.de>
 //
 // To see a description of the changes please see the Changelog file that
@@ -51,24 +51,6 @@ SplashPath::SplashPath()
     curSubpath = 0;
     hints = nullptr;
     hintsLength = hintsSize = 0;
-}
-
-SplashPath::SplashPath(SplashPath *path)
-{
-    length = path->length;
-    size = path->size;
-    pts = (SplashPathPoint *)gmallocn(size, sizeof(SplashPathPoint));
-    flags = (unsigned char *)gmallocn(size, sizeof(unsigned char));
-    memcpy(pts, path->pts, length * sizeof(SplashPathPoint));
-    memcpy(flags, path->flags, length * sizeof(unsigned char));
-    curSubpath = path->curSubpath;
-    if (path->hints) {
-        hintsLength = hintsSize = path->hintsLength;
-        hints = (SplashPathHint *)gmallocn(hintsSize, sizeof(SplashPathHint));
-        memcpy(hints, path->hints, hintsLength * sizeof(SplashPathHint));
-    } else {
-        hints = nullptr;
-    }
 }
 
 SplashPath::SplashPath(SplashPath &&path) noexcept

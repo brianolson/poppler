@@ -15,7 +15,7 @@
 //
 // Copyright (C) 2005 Kristian Høgsberg <krh@redhat.com>
 // Copyright (C) 2005 Jeff Muizelaar <jeff@infidigm.net>
-// Copyright (C) 2005-2013, 2016-2020 Albert Astals Cid <aacid@kde.org>
+// Copyright (C) 2005-2013, 2016-2021 Albert Astals Cid <aacid@kde.org>
 // Copyright (C) 2006-2008 Pino Toscano <pino@kde.org>
 // Copyright (C) 2006 Nickolay V. Shmyrev <nshmyrev@yandex.ru>
 // Copyright (C) 2006 Scott Turner <scotty1024@mac.com>
@@ -31,7 +31,7 @@
 // Copyright (C) 2015 Philipp Reinkemeier <philipp.reinkemeier@offis.de>
 // Copyright (C) 2018, 2019 Adam Reichold <adam.reichold@t-online.de>
 // Copyright (C) 2020 Oliver Sander <oliver.sander@tu-dresden.de>
-// Copyright (C) 2020 Nelson Benítez León <nbenitezl@gmail.com>
+// Copyright (C) 2020, 2021 Nelson Benítez León <nbenitezl@gmail.com>
 // Copyright (C) 2020 Philipp Knechtges <philipp-dev@knechtges.com>
 //
 // To see a description of the changes please see the Changelog file that
@@ -372,7 +372,7 @@ void Page::loadStandaloneFields(Annots *annotations, Form *form)
         return;
 
     /* Look for standalone annots, identified by being: 1) of type Widget
-     * 2) of subtype Button 3) not referenced from the Catalog's Form Field array */
+     * 2) not referenced from the Catalog's Form Field array */
     for (int i = 0; i < numAnnots; ++i) {
         Annot *annot = annotations->getAnnot(i);
 
@@ -386,7 +386,9 @@ void Page::loadStandaloneFields(Annots *annotations, Form *form)
         std::set<int> parents;
         FormField *field = Form::createFieldFromDict(annot->getAnnotObj().copy(), annot->getDoc(), r, nullptr, &parents);
 
-        if (field && field->getType() == formButton && field->getNumWidgets() == 1) {
+        if (field && field->getNumWidgets() == 1) {
+
+            static_cast<AnnotWidget *>(annot)->setField(field);
 
             field->setStandAlone(true);
             FormWidget *formWidget = field->getWidget(0);
@@ -429,10 +431,10 @@ void Page::addAnnot(Annot *annot)
         // page doesn't have annots array,
         // we have to create it
 
-        Object obj1 = Object(new Array(xref));
-        obj1.arrayAdd(Object(annotRef));
+        Array *annotsArray = new Array(xref);
+        annotsArray->add(Object(annotRef));
 
-        annotsRef = xref->addIndirectObject(&obj1);
+        annotsRef = xref->addIndirectObject(Object(annotsArray));
         annotsObj = Object(annotsRef);
         pageObj.dictSet("Annots", Object(annotsRef));
         xref->setModifiedObject(&pageObj, pageRef);
@@ -500,14 +502,14 @@ void Page::removeAnnot(Annot *annot)
     annot->setPage(0, false);
 }
 
-Links *Page::getLinks()
+std::unique_ptr<Links> Page::getLinks()
 {
-    return new Links(getAnnots());
+    return std::make_unique<Links>(getAnnots());
 }
 
-FormPageWidgets *Page::getFormWidgets()
+std::unique_ptr<FormPageWidgets> Page::getFormWidgets()
 {
-    FormPageWidgets *frmPageWidgets = new FormPageWidgets(getAnnots(), num, doc->getCatalog()->getForm());
+    auto frmPageWidgets = std::make_unique<FormPageWidgets>(getAnnots(), num, doc->getCatalog()->getForm());
     frmPageWidgets->addWidgets(standaloneFields, num);
 
     return frmPageWidgets;
@@ -769,14 +771,10 @@ void Page::makeBox(double hDPI, double vDPI, int rotate, bool useMediaBox, bool 
 
 void Page::processLinks(OutputDev *out)
 {
-    Links *links;
-    int i;
-
-    links = getLinks();
-    for (i = 0; i < links->getNumLinks(); ++i) {
+    std::unique_ptr<Links> links = getLinks();
+    for (int i = 0; i < links->getNumLinks(); ++i) {
         out->processLink(links->getLink(i));
     }
-    delete links;
 }
 
 void Page::getDefaultCTM(double *ctm, double hDPI, double vDPI, int rotate, bool useMediaBox, bool upsideDown)

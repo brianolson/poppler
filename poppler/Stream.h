@@ -15,7 +15,7 @@
 //
 // Copyright (C) 2005 Jeff Muizelaar <jeff@infidigm.net>
 // Copyright (C) 2008 Julien Rebetez <julien@fhtagn.net>
-// Copyright (C) 2008, 2010, 2011, 2016-2020 Albert Astals Cid <aacid@kde.org>
+// Copyright (C) 2008, 2010, 2011, 2016-2021 Albert Astals Cid <aacid@kde.org>
 // Copyright (C) 2009 Carlos Garcia Campos <carlosgc@gnome.org>
 // Copyright (C) 2009 Stefan Thomas <thomas@eload24.com>
 // Copyright (C) 2010 Hib Eris <hib@hiberis.nl>
@@ -28,7 +28,11 @@
 // Copyright (C) 2013 Pino Toscano <pino@kde.org>
 // Copyright (C) 2019 Volker Krause <vkrause@kde.org>
 // Copyright (C) 2019 Alexander Volkov <a.volkov@rusbitech.ru>
-// Copyright (C) 2020 Oliver Sander <oliver.sander@tu-dresden.de>
+// Copyright (C) 2020, 2021 Oliver Sander <oliver.sander@tu-dresden.de>
+// Copyright (C) 2020 Philipp Knechtges <philipp-dev@knechtges.com>
+// Copyright (C) 2021 Hubert Figuiere <hub@figuiere.net>
+// Copyright (C) 2021 Christian Persch <chpe@src.gnome.org>
+// Copyright (C) 2021 Georgiy Sgibnev <georgiy@sgibnev.com>. Work sponsored by lab50.net.
 //
 // To see a description of the changes please see the Changelog file that
 // came with your tarball or type make ChangeLog if you are building from git
@@ -42,11 +46,13 @@
 #include <cstdio>
 
 #include "poppler-config.h"
+#include "poppler_private_export.h"
 #include "Object.h"
 
 class GooFile;
 class BaseStream;
 class CachedFile;
+class SplashBitmap;
 
 //------------------------------------------------------------------------
 
@@ -99,7 +105,7 @@ typedef struct _ByteRange
 // Stream (base class)
 //------------------------------------------------------------------------
 
-class Stream
+class POPPLER_PRIVATE_EXPORT Stream
 {
 public:
     // Constructor.
@@ -196,6 +202,11 @@ public:
     // Get next line from stream.
     virtual char *getLine(char *buf, int size);
 
+    // Discard the next <n> bytes from stream.  Returns the number of
+    // bytes discarded, which will be less than <n> only if EOF is
+    // reached.
+    virtual unsigned int discardChars(unsigned int n);
+
     // Get current position in file.
     virtual Goffset getPos() = 0;
 
@@ -208,7 +219,7 @@ public:
     virtual GooString *getPSFilter(int psLevel, const char *indent);
 
     // Does this stream type potentially contain non-printable chars?
-    virtual bool isBinary(bool last = true) = 0;
+    virtual bool isBinary(bool last = true) const = 0;
 
     // Get the BaseStream of this stream.
     virtual BaseStream *getBaseStream() = 0;
@@ -222,7 +233,7 @@ public:
     virtual Object *getDictObject() = 0;
 
     // Is this an encoding filter?
-    virtual bool isEncoder() { return false; }
+    virtual bool isEncoder() const { return false; }
 
     // Get image parameters which are defined by the stream contents.
     virtual void getImageParams(int * /*bitsPerComponent*/, StreamColorSpaceMode * /*csMode*/) { }
@@ -257,7 +268,7 @@ private:
 //
 // This is the base class for all streams that output to a file
 //------------------------------------------------------------------------
-class OutStream
+class POPPLER_PRIVATE_EXPORT OutStream
 {
 public:
     // Constructor.
@@ -284,7 +295,7 @@ public:
 //------------------------------------------------------------------------
 // FileOutStream
 //------------------------------------------------------------------------
-class FileOutStream : public OutStream
+class POPPLER_PRIVATE_EXPORT FileOutStream : public OutStream
 {
 public:
     FileOutStream(FILE *fa, Goffset startA);
@@ -310,7 +321,7 @@ private:
 // This is the base class for all streams that read directly from a file.
 //------------------------------------------------------------------------
 
-class BaseStream : public Stream
+class POPPLER_PRIVATE_EXPORT BaseStream : public Stream
 {
 public:
     // TODO Mirar si puedo hacer que dictA sea un puntero
@@ -319,7 +330,7 @@ public:
     virtual BaseStream *copy() = 0;
     virtual Stream *makeSubStream(Goffset start, bool limited, Goffset length, Object &&dict) = 0;
     void setPos(Goffset pos, int dir = 0) override = 0;
-    bool isBinary(bool last = true) override { return last; }
+    bool isBinary(bool last = true) const override { return last; }
     BaseStream *getBaseStream() override { return this; }
     Stream *getUndecodedStream() override { return this; }
     Dict *getDict() override { return dict.getDict(); }
@@ -340,7 +351,7 @@ protected:
 // BaseInputStream
 //------------------------------------------------------------------------
 
-class BaseSeekInputStream : public BaseStream
+class POPPLER_PRIVATE_EXPORT BaseSeekInputStream : public BaseStream
 {
 public:
     // This enum is used to tell the seek() method how it must reposition
@@ -399,7 +410,7 @@ private:
 class FilterStream : public Stream
 {
 public:
-    FilterStream(Stream *strA);
+    explicit FilterStream(Stream *strA);
     ~FilterStream() override;
     void close() override;
     Goffset getPos() override { return str->getPos(); }
@@ -421,7 +432,7 @@ protected:
 // ImageStream
 //------------------------------------------------------------------------
 
-class ImageStream
+class POPPLER_PRIVATE_EXPORT ImageStream
 {
 public:
     // Create an image stream object for an image with the specified
@@ -507,7 +518,7 @@ private:
 
 #define fileStreamBufSize 256
 
-class FileStream : public BaseStream
+class POPPLER_PRIVATE_EXPORT FileStream : public BaseStream
 {
 public:
     FileStream(GooFile *fileA, Goffset startA, bool limitedA, Goffset lengthA, Object &&dictA);
@@ -577,7 +588,7 @@ private:
 
 #define cachedStreamBufSize 1024
 
-class CachedFileStream : public BaseStream
+class POPPLER_PRIVATE_EXPORT CachedFileStream : public BaseStream
 {
 public:
     CachedFileStream(CachedFile *ccA, Goffset startA, bool limitedA, Goffset lengthA, Object &&dictA);
@@ -715,18 +726,26 @@ private:
     T *bufPtr;
 };
 
-class MemStream : public BaseMemStream<const char>
+class POPPLER_PRIVATE_EXPORT MemStream : public BaseMemStream<const char>
 {
 public:
     MemStream(const char *bufA, Goffset startA, Goffset lengthA, Object &&dictA) : BaseMemStream(bufA, startA, lengthA, std::move(dictA)) { }
+    ~MemStream() override;
 };
 
 class AutoFreeMemStream : public BaseMemStream<char>
 {
-public:
-    AutoFreeMemStream(char *bufA, Goffset startA, Goffset lengthA, Object &&dictA) : BaseMemStream(bufA, startA, lengthA, std::move(dictA)) { }
+    bool filterRemovalForbidden = false;
 
-    ~AutoFreeMemStream() override { gfree(buf); }
+public:
+    // AutoFreeMemStream takes ownership over the buffer.
+    // The buffer should be created using gmalloc().
+    AutoFreeMemStream(char *bufA, Goffset startA, Goffset lengthA, Object &&dictA) : BaseMemStream(bufA, startA, lengthA, std::move(dictA)) { }
+    ~AutoFreeMemStream() override;
+
+    // A hack to deal with the strange behaviour of PDFDoc::writeObject().
+    bool isFilterRemovalForbidden() const;
+    void setFilterRemovalForbidden(bool forbidden);
 };
 
 //------------------------------------------------------------------------
@@ -739,7 +758,7 @@ public:
 // that creating a new FileStream (using makeSubStream).
 //------------------------------------------------------------------------
 
-class EmbedStream : public BaseStream
+class POPPLER_PRIVATE_EXPORT EmbedStream : public BaseStream
 {
 public:
     EmbedStream(Stream *strA, Object &&dictA, bool limitedA, Goffset lengthA, bool reusableA = false);
@@ -784,7 +803,7 @@ private:
 class ASCIIHexStream : public FilterStream
 {
 public:
-    ASCIIHexStream(Stream *strA);
+    explicit ASCIIHexStream(Stream *strA);
     ~ASCIIHexStream() override;
     StreamKind getKind() const override { return strASCIIHex; }
     void reset() override;
@@ -796,7 +815,7 @@ public:
     }
     int lookChar() override;
     GooString *getPSFilter(int psLevel, const char *indent) override;
-    bool isBinary(bool last = true) override;
+    bool isBinary(bool last = true) const override;
 
 private:
     int buf;
@@ -810,7 +829,7 @@ private:
 class ASCII85Stream : public FilterStream
 {
 public:
-    ASCII85Stream(Stream *strA);
+    explicit ASCII85Stream(Stream *strA);
     ~ASCII85Stream() override;
     StreamKind getKind() const override { return strASCII85; }
     void reset() override;
@@ -822,7 +841,7 @@ public:
     }
     int lookChar() override;
     GooString *getPSFilter(int psLevel, const char *indent) override;
-    bool isBinary(bool last = true) override;
+    bool isBinary(bool last = true) const override;
 
 private:
     int c[5];
@@ -847,7 +866,7 @@ public:
     int getRawChar() override;
     void getRawChars(int nChars, int *buffer) override;
     GooString *getPSFilter(int psLevel, const char *indent) override;
-    bool isBinary(bool last = true) override;
+    bool isBinary(bool last = true) const override;
 
 private:
     bool hasGetChars() override { return true; }
@@ -898,14 +917,14 @@ private:
 class RunLengthStream : public FilterStream
 {
 public:
-    RunLengthStream(Stream *strA);
+    explicit RunLengthStream(Stream *strA);
     ~RunLengthStream() override;
     StreamKind getKind() const override { return strRunLength; }
     void reset() override;
     int getChar() override { return (bufPtr >= bufEnd && !fillBuf()) ? EOF : (*bufPtr++ & 0xff); }
     int lookChar() override { return (bufPtr >= bufEnd && !fillBuf()) ? EOF : (*bufPtr & 0xff); }
     GooString *getPSFilter(int psLevel, const char *indent) override;
-    bool isBinary(bool last = true) override;
+    bool isBinary(bool last = true) const override;
 
 private:
     bool hasGetChars() override { return true; }
@@ -940,7 +959,7 @@ public:
     }
     int lookChar() override;
     GooString *getPSFilter(int psLevel, const char *indent) override;
-    bool isBinary(bool last = true) override;
+    bool isBinary(bool last = true) const override;
 
     void unfilteredReset() override;
 
@@ -1032,7 +1051,7 @@ public:
     int getChar() override;
     int lookChar() override;
     GooString *getPSFilter(int psLevel, const char *indent) override;
-    bool isBinary(bool last = true) override;
+    bool isBinary(bool last = true) const override;
 
     void unfilteredReset() override;
 
@@ -1137,7 +1156,7 @@ public:
     int getRawChar() override;
     void getRawChars(int nChars, int *buffer) override;
     GooString *getPSFilter(int psLevel, const char *indent) override;
-    bool isBinary(bool last = true) override;
+    bool isBinary(bool last = true) const override;
     void unfilteredReset() override;
 
 private:
@@ -1203,14 +1222,14 @@ private:
 class EOFStream : public FilterStream
 {
 public:
-    EOFStream(Stream *strA);
+    explicit EOFStream(Stream *strA);
     ~EOFStream() override;
     StreamKind getKind() const override { return strWeird; }
     void reset() override { }
     int getChar() override { return EOF; }
     int lookChar() override { return EOF; }
     GooString *getPSFilter(int /*psLevel*/, const char * /*indent*/) override { return nullptr; }
-    bool isBinary(bool /*last = true*/) override { return false; }
+    bool isBinary(bool /*last = true*/) const override { return false; }
 };
 
 //------------------------------------------------------------------------
@@ -1227,7 +1246,7 @@ public:
     int getChar() override;
     int lookChar() override;
     GooString *getPSFilter(int psLevel, const char *indent) override { return nullptr; }
-    bool isBinary(bool last = true) override;
+    bool isBinary(bool last = true) const override;
 
     int lookChar(int idx);
 
@@ -1250,8 +1269,8 @@ public:
     int getChar() override;
     int lookChar() override;
     GooString *getPSFilter(int /*psLevel*/, const char * /*indent*/) override { return nullptr; }
-    bool isBinary(bool /*last = true*/) override;
-    bool isEncoder() override { return true; }
+    bool isBinary(bool /*last = true*/) const override;
+    bool isEncoder() const override { return true; }
 
 private:
     int length;
@@ -1265,15 +1284,15 @@ private:
 class ASCIIHexEncoder : public FilterStream
 {
 public:
-    ASCIIHexEncoder(Stream *strA);
+    explicit ASCIIHexEncoder(Stream *strA);
     ~ASCIIHexEncoder() override;
     StreamKind getKind() const override { return strWeird; }
     void reset() override;
     int getChar() override { return (bufPtr >= bufEnd && !fillBuf()) ? EOF : (*bufPtr++ & 0xff); }
     int lookChar() override { return (bufPtr >= bufEnd && !fillBuf()) ? EOF : (*bufPtr & 0xff); }
     GooString *getPSFilter(int /*psLevel*/, const char * /*indent*/) override { return nullptr; }
-    bool isBinary(bool /*last = true*/) override { return false; }
-    bool isEncoder() override { return true; }
+    bool isBinary(bool /*last = true*/) const override { return false; }
+    bool isEncoder() const override { return true; }
 
 private:
     char buf[4];
@@ -1292,15 +1311,15 @@ private:
 class ASCII85Encoder : public FilterStream
 {
 public:
-    ASCII85Encoder(Stream *strA);
+    explicit ASCII85Encoder(Stream *strA);
     ~ASCII85Encoder() override;
     StreamKind getKind() const override { return strWeird; }
     void reset() override;
     int getChar() override { return (bufPtr >= bufEnd && !fillBuf()) ? EOF : (*bufPtr++ & 0xff); }
     int lookChar() override { return (bufPtr >= bufEnd && !fillBuf()) ? EOF : (*bufPtr & 0xff); }
     GooString *getPSFilter(int /*psLevel*/, const char * /*indent*/) override { return nullptr; }
-    bool isBinary(bool /*last = true*/) override { return false; }
-    bool isEncoder() override { return true; }
+    bool isBinary(bool /*last = true*/) const override { return false; }
+    bool isEncoder() const override { return true; }
 
 private:
     char buf[8];
@@ -1319,15 +1338,15 @@ private:
 class RunLengthEncoder : public FilterStream
 {
 public:
-    RunLengthEncoder(Stream *strA);
+    explicit RunLengthEncoder(Stream *strA);
     ~RunLengthEncoder() override;
     StreamKind getKind() const override { return strWeird; }
     void reset() override;
     int getChar() override { return (bufPtr >= bufEnd && !fillBuf()) ? EOF : (*bufPtr++ & 0xff); }
     int lookChar() override { return (bufPtr >= bufEnd && !fillBuf()) ? EOF : (*bufPtr & 0xff); }
     GooString *getPSFilter(int /*psLevel*/, const char * /*indent*/) override { return nullptr; }
-    bool isBinary(bool /*last = true*/) override { return true; }
-    bool isEncoder() override { return true; }
+    bool isBinary(bool /*last = true*/) const override { return true; }
+    bool isEncoder() const override { return true; }
 
 private:
     char buf[131];
@@ -1353,15 +1372,15 @@ struct LZWEncoderNode
 class LZWEncoder : public FilterStream
 {
 public:
-    LZWEncoder(Stream *strA);
+    explicit LZWEncoder(Stream *strA);
     ~LZWEncoder() override;
     StreamKind getKind() const override { return strWeird; }
     void reset() override;
     int getChar() override;
     int lookChar() override;
     GooString *getPSFilter(int psLevel, const char *indent) override { return nullptr; }
-    bool isBinary(bool last = true) override { return true; }
-    bool isEncoder() override { return true; }
+    bool isBinary(bool last = true) const override { return true; }
+    bool isEncoder() const override { return true; }
 
 private:
     LZWEncoderNode table[4096];
@@ -1383,15 +1402,15 @@ private:
 class CMYKGrayEncoder : public FilterStream
 {
 public:
-    CMYKGrayEncoder(Stream *strA);
+    explicit CMYKGrayEncoder(Stream *strA);
     ~CMYKGrayEncoder() override;
     StreamKind getKind() const override { return strWeird; }
     void reset() override;
     int getChar() override { return (bufPtr >= bufEnd && !fillBuf()) ? EOF : (*bufPtr++ & 0xff); }
     int lookChar() override { return (bufPtr >= bufEnd && !fillBuf()) ? EOF : (*bufPtr & 0xff); }
     GooString *getPSFilter(int /*psLevel*/, const char * /*indent*/) override { return nullptr; }
-    bool isBinary(bool /*last = true*/) override { return false; }
-    bool isEncoder() override { return true; }
+    bool isBinary(bool /*last = true*/) const override { return false; }
+    bool isEncoder() const override { return true; }
 
 private:
     char buf[2];
@@ -1409,21 +1428,68 @@ private:
 class RGBGrayEncoder : public FilterStream
 {
 public:
-    RGBGrayEncoder(Stream *strA);
+    explicit RGBGrayEncoder(Stream *strA);
     ~RGBGrayEncoder() override;
     StreamKind getKind() const override { return strWeird; }
     void reset() override;
     int getChar() override { return (bufPtr >= bufEnd && !fillBuf()) ? EOF : (*bufPtr++ & 0xff); }
     int lookChar() override { return (bufPtr >= bufEnd && !fillBuf()) ? EOF : (*bufPtr & 0xff); }
     GooString *getPSFilter(int /*psLevel*/, const char * /*indent*/) override { return nullptr; }
-    bool isBinary(bool /*last = true*/) override { return false; }
-    bool isEncoder() override { return true; }
+    bool isBinary(bool /*last = true*/) const override { return false; }
+    bool isEncoder() const override { return true; }
 
 private:
     char buf[2];
     char *bufPtr;
     char *bufEnd;
     bool eof;
+
+    bool fillBuf();
+};
+
+//------------------------------------------------------------------------
+// SplashBitmapCMYKEncoder
+//
+// This stream helps to condense SplashBitmaps (mostly of DeviceN8 type) into
+// pure CMYK colors. In particular for a DeviceN8 bitmap it redacts the spot colorants.
+//------------------------------------------------------------------------
+
+class SplashBitmapCMYKEncoder : public Stream
+{
+public:
+    explicit SplashBitmapCMYKEncoder(SplashBitmap *bitmapA);
+    ~SplashBitmapCMYKEncoder() override;
+    StreamKind getKind() const override { return strWeird; }
+    void reset() override;
+    int getChar() override;
+    int lookChar() override;
+    GooString *getPSFilter(int /*psLevel*/, const char * /*indent*/) override { return nullptr; }
+    bool isBinary(bool /*last = true*/) const override { return true; }
+
+    // Although we are an encoder, we return false here, since we do not want do be auto-deleted by
+    // successive streams.
+    bool isEncoder() const override { return false; }
+
+    int getUnfilteredChar() override { return getChar(); }
+    void unfilteredReset() override { reset(); }
+
+    BaseStream *getBaseStream() override { return nullptr; }
+    Stream *getUndecodedStream() override { return this; }
+
+    Dict *getDict() override { return nullptr; }
+    Object *getDictObject() override { return nullptr; }
+
+    Goffset getPos() override;
+    void setPos(Goffset pos, int dir = 0) override;
+
+private:
+    SplashBitmap *bitmap;
+    size_t width;
+    int height;
+
+    std::vector<unsigned char> buf;
+    size_t bufPtr;
+    int curLine;
 
     bool fillBuf();
 };

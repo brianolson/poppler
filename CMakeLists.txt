@@ -1,15 +1,24 @@
-project(poppler)
+cmake_minimum_required(VERSION 3.10.0 FATAL_ERROR)
 
-cmake_minimum_required(VERSION 3.5.0 FATAL_ERROR)
+project(poppler)
 
 set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/modules)
 
 include(PopplerDefaults)
 include(PopplerMacros)
+# Ensure that the user-provided C_FLAGS are used for try_compile() calls.
+# This is needed since PopplerMacros.cmake clears CMAKE_C_FLAGS and if
+# CMAKE_TRY_COMPILE_CONFIGURATION is empty CMake only uses the flags
+# specified in CMAKE_C_FLAGS (https://gitlab.kitware.com/cmake/cmake/-/issues/22414
+# and https://gitlab.kitware.com/cmake/cmake/-/issues/19512).
+# We therefore have to explicitly set CMAKE_TRY_COMPILE_CONFIGURATION until we
+# depend on a CMake release that includes a fix for those issues.
+# This is set after including PopplerMacros since that sets the default
+# CMAKE_BUILD_TYPE and also sets _CMAKE_BUILD_TYPE_UPPER.
+set(CMAKE_TRY_COMPILE_CONFIGURATION "${_CMAKE_BUILD_TYPE_UPPER}")
+
 include(MacroOptionalFindPackage)
 find_package(PkgConfig)
-include(MacroEnsureVersion)
-include(MacroBoolTo01)
 if (WIN32)
   message("-- Using win32 threads")
 else()
@@ -22,6 +31,7 @@ test_big_endian(WORDS_BIGENDIAN)
 include(CheckFileOffsetBits)
 CHECK_FILE_OFFSET_BITS()
 
+include(GenerateExportHeader)
 include(GNUInstallDirs)
 
 set(ENABLE_FUZZER FALSE)
@@ -35,16 +45,24 @@ if (ECM_FOUND)
     endif()
 endif()
 
-set(POPPLER_MAJOR_VERSION "20")
-set(POPPLER_MINOR_VERSION_STRING "10")
+set(POPPLER_MAJOR_VERSION "21")
+set(POPPLER_MINOR_VERSION_STRING "12")
 # We want the string version to have 08 but the integer version can't have a leading 0 since otherwise it's considered octal
 # So strip a leading 0 if found in POPPLER_MINOR_VERSION_STRING and store the result in POPPLER_MINOR_VERSION
 string(REGEX REPLACE "^0?(.+)$" "\\1" POPPLER_MINOR_VERSION "${POPPLER_MINOR_VERSION_STRING}")
 set(POPPLER_MICRO_VERSION "0")
 set(POPPLER_VERSION "${POPPLER_MAJOR_VERSION}.${POPPLER_MINOR_VERSION_STRING}.${POPPLER_MICRO_VERSION}")
 
-set (CMAKE_CXX_STANDARD 14)
-set (CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_EXTENSIONS OFF)
+set(CMAKE_LINK_DEPENDS_NO_SHARED TRUE)
+set(CMAKE_C_VISIBILITY_PRESET hidden)
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+set(CMAKE_VISIBILITY_INLINES_HIDDEN 1)
+
 
 # command line switches
 option(ENABLE_UNSTABLE_API_ABI_HEADERS "Install API/ABI unstable xpdf headers." OFF)
@@ -52,7 +70,8 @@ option(BUILD_GTK_TESTS "Whether to compile the GTK+ test programs." ON)
 option(BUILD_QT5_TESTS "Whether to compile the Qt5 test programs." ON)
 option(BUILD_QT6_TESTS "Whether to compile the Qt6 test programs." ON)
 option(BUILD_CPP_TESTS "Whether to compile the CPP test programs." ON)
-option(ENABLE_SPLASH "Build the Splash graphics backend." ON)
+option(BUILD_MANUAL_TESTS "Whether to compile manual test programs." ON)
+option(ENABLE_BOOST "Use boost (for Splash backend performance)." ON)
 option(ENABLE_UTILS "Compile poppler command line utils." ON)
 option(ENABLE_CPP "Compile poppler cpp wrapper." ON)
 option(ENABLE_GLIB "Compile poppler glib wrapper." ON)
@@ -125,9 +144,10 @@ set(TEXTOUT_WORD_LIST ON)
 
 # setting the minimum required versions for some components
 set(CAIRO_VERSION "1.10.0")
-set(GLIB_REQUIRED "2.41")
+set(GLIB_REQUIRED "2.56")
+set(GTK_REQUIRED "3.22")
+set(GDK_PIXBUF_REQUIRED "2.36")
 
-macro_bool_to_01(ENABLE_SPLASH HAVE_SPLASH)
 find_package(Freetype REQUIRED)
 if(WITH_FONTCONFIGURATION_FONTCONFIG)
   find_package(Fontconfig REQUIRED)
@@ -140,7 +160,11 @@ if(ENABLE_DCTDECODER STREQUAL "libjpeg")
   if(JPEG_FOUND)
     set(ENABLE_LIBJPEG ${JPEG_FOUND})
   else()
-    message(FATAL_ERROR "Install libjpeg before trying to build poppler. You can also decide to use the internal unmaintained DCT decoder or none at all.")
+    message(STATUS "Could NOT find libjpeg.")
+    message(FATAL_ERROR "Install libjpeg before trying to build poppler. You can \
+also decide to use the internal unmaintained DCT decoder or none at all.\n\
+Possible options are: -DENABLE_DCTDECODER=libjpeg, -DENABLE_DCTDECODER=none, \
+-DENABLE_DCTDECODER=unmaintained")
   endif()
   set(HAVE_DCT_DECODER ON)
 elseif(ENABLE_DCTDECODER STREQUAL "unmaintained")
@@ -154,7 +178,7 @@ else()
 endif()
 
 if (ENABLE_QT5)
-  find_package(Qt5Core 5.5)  # Update QT_DISABLE_DEPRECATED_BEFORE in qt5/CMakeLists.txt when increasing this
+  find_package(Qt5Core 5.9)  # Update QT_DISABLE_DEPRECATED_BEFORE in qt5/CMakeLists.txt when increasing this
   find_package(Qt5Gui)
   find_package(Qt5Xml)
   find_package(Qt5Widgets)
@@ -166,14 +190,24 @@ if (ENABLE_QT5)
 endif()
 
 if (ENABLE_QT6)
-  find_package(Qt6 COMPONENTS Core Gui Widgets Test QUIET)
+  SET(QT_NO_CREATE_VERSIONLESS_TARGETS ON)
+  find_package(Qt6 6.1 COMPONENTS Core Gui Widgets Test QUIET)
   if (NOT (Qt6Core_FOUND AND Qt6Gui_FOUND AND Qt6Widgets_FOUND AND Qt6Test_FOUND))
     message("-- Package Qt6Core or Qt6Gui or Qt6Widgets or Qt6Test not found")
     set(ENABLE_QT6 OFF)
   endif()
 endif()
 
+# Check for Cairo rendering backend
 macro_optional_find_package(Cairo ${CAIRO_VERSION})
+
+find_package(Boost 1.58.0)
+if(Boost_FOUND)
+  set(USE_BOOST_HEADERS ON)
+elseif(ENABLE_BOOST)
+  message(FATAL_ERROR "-- Boost recommended for Splash. Use ENABLE_BOOST=OFF to skip.")
+endif()
+
 if(CAIRO_FOUND)
   set(HAVE_CAIRO ${CAIRO_FOUND})
   set(CAIRO_FEATURE "#define POPPLER_HAS_CAIRO 1")
@@ -234,7 +268,11 @@ if(ENABLE_LIBOPENJPEG STREQUAL "openjpeg2")
   find_package(OpenJPEG)
   set(WITH_OPENJPEG ${OpenJPEG_FOUND})
   if(NOT OpenJPEG_FOUND OR OPENJPEG_MAJOR_VERSION VERSION_LESS 2)
-    message(FATAL_ERROR "Install libopenjpeg2 before trying to build poppler. You can also decide to use the internal unmaintained JPX decoder or none at all.")
+    message(STATUS "Could NOT find openjpeg2.")
+    message(FATAL_ERROR "Install libopenjpeg2 before trying to build poppler. You \
+can also decide to use the internal unmaintained JPX decoder or none at all.\n\
+Possible options are: -DENABLE_LIBOPENJPEG=openjpeg2, -DENABLE_LIBOPENJPEG=none, \
+-DENABLE_LIBOPENJPEG=unmaintained,")
   endif()
   set(HAVE_JPX_DECODER ON)
 elseif(ENABLE_LIBOPENJPEG STREQUAL "unmaintained")
@@ -307,14 +345,6 @@ if(LCMS2_FOUND)
   include_directories(SYSTEM ${LCMS2_INCLUDE_DIR})
 endif()
 
-if(ENABLE_SPLASH)
-  find_package(Boost 1.58.0)
-  if(Boost_FOUND)
-    include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
-    set(USE_BOOST_HEADERS ON)
-  endif()
-endif()
-
 # Recent versions of poppler-data install a .pc file.
 # Use it to determine the encoding data path, if available.
 # Default to the same prefix otherwise.
@@ -367,6 +397,7 @@ set(poppler_SRCS
   fofi/FoFiType1C.cc
   fofi/FoFiIdentifier.cc
   poppler/Annot.cc
+  poppler/AnnotStampImageHelper.cc
   poppler/Array.cc
   poppler/CachedFile.cc
   poppler/Catalog.cc
@@ -376,6 +407,8 @@ set(poppler_SRCS
   poppler/Decrypt.cc
   poppler/Dict.cc
   poppler/Error.cc
+  poppler/FDPDFDocBuilder.cc
+  poppler/FILECacheLoader.cc
   poppler/FileSpec.cc
   poppler/FontEncodingTables.cc
   poppler/Form.cc
@@ -386,6 +419,7 @@ set(poppler_SRCS
   poppler/GfxState.cc
   poppler/GlobalParams.cc
   poppler/Hints.cc
+  poppler/ImageEmbeddingUtils.cc
   poppler/JArithmeticDecoder.cc
   poppler/JBIG2Stream.cc
   poppler/JSInfo.cc
@@ -403,6 +437,7 @@ set(poppler_SRCS
   poppler/PageTransition.cc
   poppler/Parser.cc
   poppler/PDFDoc.cc
+  poppler/PDFDocBuilder.cc
   poppler/PDFDocEncoding.cc
   poppler/PDFDocFactory.cc
   poppler/ProfileData.cc
@@ -421,37 +456,31 @@ set(poppler_SRCS
   poppler/TextOutputDev.cc
   poppler/PageLabelInfo.cc
   poppler/SecurityHandler.cc
-  poppler/StdinCachedFile.cc
-  poppler/StdinPDFDocBuilder.cc
   poppler/Sound.cc
   poppler/ViewerPreferences.cc
   poppler/Movie.cc
   poppler/Rendition.cc
   poppler/CertificateInfo.cc
   poppler/BBoxOutputDev.cc
+  poppler/SplashOutputDev.cc
+  splash/Splash.cc
+  splash/SplashBitmap.cc
+  splash/SplashClip.cc
+  splash/SplashFTFont.cc
+  splash/SplashFTFontEngine.cc
+  splash/SplashFTFontFile.cc
+  splash/SplashFont.cc
+  splash/SplashFontEngine.cc
+  splash/SplashFontFile.cc
+  splash/SplashFontFileID.cc
+  splash/SplashPath.cc
+  splash/SplashPattern.cc
+  splash/SplashScreen.cc
+  splash/SplashState.cc
+  splash/SplashXPath.cc
+  splash/SplashXPathScanner.cc
 )
 set(poppler_LIBS ${FREETYPE_LIBRARIES})
-if(ENABLE_SPLASH)
-  set(poppler_SRCS ${poppler_SRCS}
-    poppler/SplashOutputDev.cc
-    splash/Splash.cc
-    splash/SplashBitmap.cc
-    splash/SplashClip.cc
-    splash/SplashFTFont.cc
-    splash/SplashFTFontEngine.cc
-    splash/SplashFTFontFile.cc
-    splash/SplashFont.cc
-    splash/SplashFontEngine.cc
-    splash/SplashFontFile.cc
-    splash/SplashFontFileID.cc
-    splash/SplashPath.cc
-    splash/SplashPattern.cc
-    splash/SplashScreen.cc
-    splash/SplashState.cc
-    splash/SplashXPath.cc
-    splash/SplashXPathScanner.cc
-  )
-endif()
 if(FONTCONFIG_FOUND)
   set(poppler_LIBS ${poppler_LIBS} ${FONTCONFIG_LIBRARIES})
 endif()
@@ -488,12 +517,7 @@ if (ENABLE_NSS3)
   set(poppler_SRCS ${poppler_SRCS}
     poppler/SignatureHandler.cc
   )
-  if(${CMAKE_VERSION} VERSION_LESS "3.6.0")
-    set(poppler_LIBS ${poppler_LIBS} ${NSS3_LIBRARIES})
-    include_directories(SYSTEM ${NSS3_INCLUDE_DIRS})
-  else()
-    set(poppler_LIBS ${poppler_LIBS} PkgConfig::NSS3)
-  endif()
+  set(poppler_LIBS ${poppler_LIBS} PkgConfig::NSS3)
 endif()
 if (OpenJPEG_FOUND)
   set(poppler_SRCS ${poppler_SRCS}
@@ -519,6 +543,9 @@ if(PNG_FOUND)
 endif()
 if(TIFF_FOUND)
   set(poppler_LIBS ${poppler_LIBS} TIFF::TIFF)
+endif()
+if(Boost_FOUND)
+  set(poppler_LIBS ${poppler_LIBS} Boost::boost)
 endif()
 
 if (GPERF AND RUN_GPERF_IF_PRESENT)
@@ -563,7 +590,8 @@ add_library(poppler STATIC ${poppler_SRCS})
 else()
 add_library(poppler ${poppler_SRCS})
 endif()
-set_target_properties(poppler PROPERTIES VERSION 103.0.0 SOVERSION 103)
+generate_export_header(poppler BASE_NAME poppler-private EXPORT_FILE_NAME "${CMAKE_CURRENT_BINARY_DIR}/poppler_private_export.h")
+set_target_properties(poppler PROPERTIES VERSION 116.0.0 SOVERSION 116)
 if(MINGW AND BUILD_SHARED_LIBS)
     get_target_property(POPPLER_SOVERSION poppler SOVERSION)
     set_target_properties(poppler PROPERTIES SUFFIX "-${POPPLER_SOVERSION}${CMAKE_SHARED_LIBRARY_SUFFIX}")
@@ -577,6 +605,7 @@ install(TARGETS poppler RUNTIME DESTINATION bin LIBRARY DESTINATION ${CMAKE_INST
 if(ENABLE_UNSTABLE_API_ABI_HEADERS)
   install(FILES
     poppler/Annot.h
+    poppler/AnnotStampImageHelper.h
     poppler/Array.h
     poppler/CachedFile.h
     poppler/Catalog.h
@@ -586,6 +615,8 @@ if(ENABLE_UNSTABLE_API_ABI_HEADERS)
     poppler/Decrypt.h
     poppler/Dict.h
     poppler/Error.h
+    poppler/FDPDFDocBuilder.h
+    poppler/FILECacheLoader.h
     poppler/FileSpec.h
     poppler/FontEncodingTables.h
     poppler/FontInfo.h
@@ -643,12 +674,12 @@ if(ENABLE_UNSTABLE_API_ABI_HEADERS)
     poppler/PSOutputDev.h
     poppler/TextOutputDev.h
     poppler/SecurityHandler.h
-    poppler/StdinCachedFile.h
-    poppler/StdinPDFDocBuilder.h
     poppler/BBoxOutputDev.h
     poppler/UTF.h
     poppler/Sound.h
+    ${CMAKE_CURRENT_BINARY_DIR}/poppler_private_export.h
     ${CMAKE_CURRENT_BINARY_DIR}/poppler/poppler-config.h
+    poppler/SplashOutputDev.h
     DESTINATION include/poppler)
   install(FILES
     goo/GooTimer.h
@@ -700,33 +731,28 @@ if(ENABLE_UNSTABLE_API_ABI_HEADERS)
       poppler/JPXStream.h
       DESTINATION include/poppler)
   endif()
-  if(ENABLE_SPLASH)
-    install(FILES
-      poppler/SplashOutputDev.h
-      DESTINATION include/poppler)
-    install(FILES
-      splash/Splash.h
-      splash/SplashBitmap.h
-      splash/SplashClip.h
-      splash/SplashErrorCodes.h
-      splash/SplashFTFont.h
-      splash/SplashFTFontEngine.h
-      splash/SplashFTFontFile.h
-      splash/SplashFont.h
-      splash/SplashFontEngine.h
-      splash/SplashFontFile.h
-      splash/SplashFontFileID.h
-      splash/SplashGlyphBitmap.h
-      splash/SplashMath.h
-      splash/SplashPath.h
-      splash/SplashPattern.h
-      splash/SplashScreen.h
-      splash/SplashState.h
-      splash/SplashTypes.h
-      splash/SplashXPath.h
-      splash/SplashXPathScanner.h
-      DESTINATION include/poppler/splash)
-  endif()
+  install(FILES
+    splash/Splash.h
+    splash/SplashBitmap.h
+    splash/SplashClip.h
+    splash/SplashErrorCodes.h
+    splash/SplashFTFont.h
+    splash/SplashFTFontEngine.h
+    splash/SplashFTFontFile.h
+    splash/SplashFont.h
+    splash/SplashFontEngine.h
+    splash/SplashFontFile.h
+    splash/SplashFontFileID.h
+    splash/SplashGlyphBitmap.h
+    splash/SplashMath.h
+    splash/SplashPath.h
+    splash/SplashPattern.h
+    splash/SplashScreen.h
+    splash/SplashState.h
+    splash/SplashTypes.h
+    splash/SplashXPath.h
+    splash/SplashXPathScanner.h
+    DESTINATION include/poppler/splash)
   if(CAIRO_FOUND)
     install(FILES
       poppler/CairoFontEngine.h
@@ -743,7 +769,9 @@ endif()
 if(ENABLE_GLIB)
   add_subdirectory(glib)
 endif()
-add_subdirectory(test)
+if (BUILD_MANUAL_TESTS)
+  add_subdirectory(test)
+endif()
 if(ENABLE_QT5)
   add_subdirectory(qt5)
 endif()
@@ -754,32 +782,20 @@ if(ENABLE_CPP)
   add_subdirectory(cpp)
 endif()
 
-set(PKG_CONFIG_VERSION_0_18 TRUE)
-if(PKG_CONFIG_EXECUTABLE)
-  exec_program(${PKG_CONFIG_EXECUTABLE} ARGS --version RETURN_VALUE _return_VALUE OUTPUT_VARIABLE _output_VAR)
-  macro_ensure_version("0.18" "${_output_VAR}" PKG_CONFIG_VERSION_0_18)
-endif()
-if(PKG_CONFIG_VERSION_0_18)
-  set(PC_REQUIRES "")
-  set(PC_REQUIRES_PRIVATE "Requires.private: poppler = ${POPPLER_VERSION}")
-else()
-  set(PC_REQUIRES "poppler = ${POPPLER_VERSION}")
-  set(PC_REQUIRES_PRIVATE "")
-endif()
+# Configure "Requires" field & install .pc files for packagers
+set(PC_REQUIRES "")
+set(PC_REQUIRES_PRIVATE "Requires.private: poppler = ${POPPLER_VERSION}")
 
 if(PKG_CONFIG_EXECUTABLE)
   poppler_create_install_pkgconfig(poppler.pc ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
-  if(ENABLE_SPLASH)
-    poppler_create_install_pkgconfig(poppler-splash.pc ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
-  endif()
   if(ENABLE_QT5)
     poppler_create_install_pkgconfig(poppler-qt5.pc ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
   endif()
+  if(ENABLE_QT6)
+    poppler_create_install_pkgconfig(poppler-qt6.pc ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+  endif()
   if(ENABLE_GLIB)
     poppler_create_install_pkgconfig(poppler-glib.pc ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
-  endif()
-  if(CAIRO_FOUND)
-    poppler_create_install_pkgconfig(poppler-cairo.pc ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
   endif()
   if(ENABLE_CPP)
     poppler_create_install_pkgconfig(poppler-cpp.pc ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
@@ -788,9 +804,10 @@ else()
   MESSAGE(STATUS ".pc files will not be installed becasue of missing 'pkg-config'!")
 endif()
 
+# Summarize build options & display warnings for user
 message("Building Poppler with support for:")
 show_end_message("font configuration" ${font_configuration})
-show_end_message_yesno("splash output" ENABLE_SPLASH)
+show_end_message_yesno("use boost (Splash)" ENABLE_BOOST)
 show_end_message_yesno("cairo output" CAIRO_FOUND)
 show_end_message_yesno("qt5 wrapper" ENABLE_QT5)
 show_end_message_yesno("qt6 wrapper" ENABLE_QT6)
@@ -807,14 +824,9 @@ show_end_message_yesno("use nss3" ENABLE_NSS3)
 show_end_message_yesno("use curl" ENABLE_LIBCURL)
 show_end_message_yesno("use libopenjpeg2" WITH_OPENJPEG)
 show_end_message_yesno("use lcms2" USE_CMS)
-show_end_message_yesno("use boost" Boost_FOUND)
 show_end_message_yesno("command line utils" ENABLE_UTILS)
 show_end_message_yesno("fuzz target" ENABLE_FUZZER)
 show_end_message("test data dir" ${TESTDATADIR})
-
-if(NOT ENABLE_SPLASH AND NOT CAIRO_FOUND)
-  message("Warning: There is no rendering backend enabled")
-endif()
 
 if(NOT ENABLE_LIBJPEG AND HAVE_DCT_DECODER)
   message("Warning: Using libjpeg is recommended. The internal DCT decoder is unmaintained.")
@@ -836,7 +848,7 @@ if(NOT HAVE_JPX_DECODER)
   message("Warning: You're not compiling any JPX decoder. Some files will fail to display properly.")
 endif()
 
-if(ENABLE_SPLASH AND NOT Boost_FOUND)
+if(NOT ENABLE_BOOST)
   message("Warning: Use of boost is recommended for better performance.")
 endif()
 

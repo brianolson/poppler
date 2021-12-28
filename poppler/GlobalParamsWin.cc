@@ -9,10 +9,12 @@
    // Copyright (C) 2013, 2018, 2019 Adam Reichold <adamreichold@myopera.com>
    // Copyright (C) 2013 Dmytro Morgun <lztoad@gmail.com>
    // Copyright (C) 2017 Christoph Cullmann <cullmann@kde.org>
-   // Copyright (C) 2017, 2018, 2020 Albert Astals Cid <aacid@kde.org>
+   // Copyright (C) 2017, 2018, 2020, 2021 Albert Astals Cid <aacid@kde.org>
    // Copyright (C) 2018 Klarälvdalens Datakonsult AB, a KDAB Group company, <info@kdab.com>. Work sponsored by the LiMux project of the city of Munich
    // Copyright (C) 2019 Christian Persch <chpe@src.gnome.org>
    // Copyright (C) 2019 Oliver Sander <oliver.sander@tu-dresden.de>
+   // Copyright (C) 2021 Stefan Löffler <st.loeffler@gmail.com>
+   // Copyright (C) 2021 sunderme <sunderme@gmx.de>
 
 TODO: instead of a fixed mapping defined in displayFontTab, it could
 scan the whole fonts directory, parse TTF files and build font
@@ -260,7 +262,7 @@ void SysFontList::scanWindowsFonts(GooString *winFontDir)
                         } else {
                             p1 = p0 + strlen(p0);
                         }
-                        fonts->push_back(makeWindowsFont(p0, fontNum, fontPath->c_str()));
+                        fonts.push_back(makeWindowsFont(p0, fontNum, fontPath->c_str()));
                         p0 = p1;
                         ++fontNum;
                     }
@@ -382,7 +384,7 @@ void GlobalParams::setupBaseFonts(const char *dir)
 
         GooString *fontName = new GooString(displayFontTab[i].name);
 
-        if (dir) {
+        if (dir && displayFontTab[i].t1FileName) {
             GooString *fontPath = appendToPath(new GooString(dir), displayFontTab[i].t1FileName);
             if (FileExists(fontPath->c_str()) || FileExists(replaceSuffix(fontPath, ".pfb", ".pfa")->c_str())) {
                 addFontFile(fontName, fontPath);
@@ -414,7 +416,7 @@ void GlobalParams::setupBaseFonts(const char *dir)
     fileName->append("/cidfmap");
 
     // try to open file
-    file = GooFile::open(fileName);
+    file = GooFile::open(fileName->toStr());
 
     if (file != nullptr) {
         Parser *parser;
@@ -504,7 +506,7 @@ GooString *GlobalParams::findSystemFontFile(const GfxFont *font, SysFontType *ty
     if (!fontName)
         return nullptr;
     std::unique_lock<std::recursive_mutex> locker(mutex);
-    setupBaseFonts(nullptr);
+    setupBaseFonts(POPPLER_FONTSDIR);
 
     // TODO: base14Name should be changed?
     // In the system using FontConfig, findSystemFontFile() uses

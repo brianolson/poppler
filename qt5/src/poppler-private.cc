@@ -9,6 +9,8 @@
  * Copyright (C) 2018-2020 Adam Reichold <adam.reichold@t-online.de>
  * Copyright (C) 2019, 2020 Oliver Sander <oliver.sander@tu-dresden.de>
  * Copyright (C) 2019 João Netto <joaonetto901@gmail.com>
+ * Copyright (C) 2021 Klarälvdalens Datakonsult AB, a KDAB Group company, <info@kdab.com>
+ * Copyright (C) 2021 Mahmoud Khalil <mahmoudkhalil11@gmail.com>
  * Inspired on code by
  * Copyright (C) 2004 by Albert Astals Cid <tsdgeos@terra.es>
  * Copyright (C) 2004 by Enrico Ros <eros.kde@email.it>
@@ -115,6 +117,9 @@ QString UnicodeParsedString(const std::string &s1)
 
 GooString *QStringToUnicodeGooString(const QString &s)
 {
+    if (s.isEmpty()) {
+        return new GooString();
+    }
     int len = s.length() * 2 + 2;
     char *cstring = (char *)gmallocn(len, sizeof(char));
     cstring[0] = (char)0xfe;
@@ -246,6 +251,8 @@ void DocumentData::init()
     paperColor = Qt::white;
     m_hints = 0;
     m_optContentModel = nullptr;
+    xrefReconstructed = false;
+    xrefReconstructedCallback = {};
 }
 
 void DocumentData::addTocChildren(QDomDocument *docSyn, QDomNode *parent, const std::vector<::OutlineItem *> *items)
@@ -275,6 +282,17 @@ void DocumentData::addTocChildren(QDomDocument *docSyn, QDomNode *parent, const 
         const std::vector<::OutlineItem *> *children = outlineItem->getKids();
         if (children)
             addTocChildren(docSyn, &item, children);
+    }
+}
+
+void DocumentData::noitfyXRefReconstructed()
+{
+    if (!xrefReconstructed) {
+        xrefReconstructed = true;
+    }
+
+    if (xrefReconstructedCallback) {
+        xrefReconstructedCallback();
     }
 }
 

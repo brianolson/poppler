@@ -11,7 +11,7 @@
 // All changes made under the Poppler project to this file are licensed
 // under GPL version 2 or later
 //
-// Copyright (C) 2005-2020 Albert Astals Cid <aacid@kde.org>
+// Copyright (C) 2005-2021 Albert Astals Cid <aacid@kde.org>
 // Copyright (C) 2005 Marco Pesenti Gritti <mpg@redhat.com>
 // Copyright (C) 2010-2016 Thomas Freitag <Thomas.Freitag@alfa.de>
 // Copyright (C) 2010 Christian Feuersänger <cfeuersaenger@googlemail.com>
@@ -24,6 +24,7 @@
 // Copyright (C) 2019, 2020 Oliver Sander <oliver.sander@tu-dresden.de>
 // Copyright (C) 2019 Marek Kasik <mkasik@redhat.com>
 // Copyright (C) 2020 Tobias Deiminger <haxtibal@posteo.de>
+// Copyright (C) 2021 Even Rouault <even.rouault@spatialys.com>
 //
 // To see a description of the changes please see the Changelog file that
 // came with your tarball or type make ChangeLog if you are building from git
@@ -1971,11 +1972,11 @@ void Splash::strokeNarrow(SplashPath *path)
                 dxdy = seg->dxdy;
                 if (y0 < state->clip->getYMinI()) {
                     y0 = state->clip->getYMinI();
-                    x0 = splashFloor(seg->x0 + ((SplashCoord)y0 - seg->y0) * dxdy);
+                    x0 = splashFloor(seg->x0 + (state->clip->getYMin() - seg->y0) * dxdy);
                 }
                 if (y1 > state->clip->getYMaxI()) {
                     y1 = state->clip->getYMaxI();
-                    x1 = splashFloor(seg->x0 + ((SplashCoord)y1 - seg->y0) * dxdy);
+                    x1 = splashFloor(seg->x0 + (state->clip->getYMax() - seg->y0) * dxdy);
                 }
                 if (x0 <= x1) {
                     xa = x0;
@@ -2366,7 +2367,7 @@ SplashError Splash::fillWithPattern(SplashPath *path, bool eo, SplashPattern *pa
         yMinI = yMinI * splashAASize;
         yMaxI = (yMaxI + 1) * splashAASize - 1;
     }
-    SplashXPathScanner scanner(&xPath, eo, yMinI, yMaxI);
+    SplashXPathScanner scanner(xPath, eo, yMinI, yMaxI);
 
     // get the min and max x and y values
     if (vectorAntialias && !inShading) {
@@ -2517,7 +2518,7 @@ SplashError Splash::xorFill(SplashPath *path, bool eo)
     }
     SplashXPath xPath(path, state->matrix, state->flatness, true);
     xPath.sort();
-    SplashXPathScanner scanner(&xPath, eo, state->clip->getYMinI(), state->clip->getYMaxI());
+    SplashXPathScanner scanner(xPath, eo, state->clip->getYMinI(), state->clip->getYMaxI());
 
     // get the min and max x and y values
     scanner.getBBox(&xMinI, &yMinI, &xMaxI, &yMaxI);
@@ -2828,6 +2829,14 @@ void Splash::arbitraryTransformMask(SplashImageMaskSource src, void *srcData, in
     vy[2] = mat[1] + mat[3] + mat[5];
     vx[3] = mat[0] + mat[4];
     vy[3] = mat[1] + mat[5];
+
+    // make sure vx/vy fit in integers since we're transforming them to in the next lines
+    for (i = 0; i < 4; ++i) {
+        if (unlikely(vx[i] < INT_MIN || vx[i] > INT_MAX || vy[i] < INT_MIN || vy[i] > INT_MAX)) {
+            error(errInternal, -1, "arbitraryTransformMask vertices values don't fit in an integer");
+            return;
+        }
+    }
 
     // clipping
     xMin = imgCoordMungeLowerC(vx[0], glyphMode);
@@ -3922,22 +3931,27 @@ SplashBitmap *Splash::scaleImage(SplashImageSource src, void *srcData, SplashCol
 
     dest = new SplashBitmap(scaledWidth, scaledHeight, 1, srcMode, srcAlpha, true, bitmap->getSeparationList());
     if (dest->getDataPtr() != nullptr && srcHeight > 0 && srcWidth > 0) {
+        bool success = true;
         if (scaledHeight < srcHeight) {
             if (scaledWidth < srcWidth) {
-                scaleImageYdownXdown(src, srcData, srcMode, nComps, srcAlpha, srcWidth, srcHeight, scaledWidth, scaledHeight, dest);
+                success = scaleImageYdownXdown(src, srcData, srcMode, nComps, srcAlpha, srcWidth, srcHeight, scaledWidth, scaledHeight, dest);
             } else {
-                scaleImageYdownXup(src, srcData, srcMode, nComps, srcAlpha, srcWidth, srcHeight, scaledWidth, scaledHeight, dest);
+                success = scaleImageYdownXup(src, srcData, srcMode, nComps, srcAlpha, srcWidth, srcHeight, scaledWidth, scaledHeight, dest);
             }
         } else {
             if (scaledWidth < srcWidth) {
-                scaleImageYupXdown(src, srcData, srcMode, nComps, srcAlpha, srcWidth, srcHeight, scaledWidth, scaledHeight, dest);
+                success = scaleImageYupXdown(src, srcData, srcMode, nComps, srcAlpha, srcWidth, srcHeight, scaledWidth, scaledHeight, dest);
             } else {
                 if (!tilingPattern && isImageInterpolationRequired(srcWidth, srcHeight, scaledWidth, scaledHeight, interpolate)) {
-                    scaleImageYupXupBilinear(src, srcData, srcMode, nComps, srcAlpha, srcWidth, srcHeight, scaledWidth, scaledHeight, dest);
+                    success = scaleImageYupXupBilinear(src, srcData, srcMode, nComps, srcAlpha, srcWidth, srcHeight, scaledWidth, scaledHeight, dest);
                 } else {
-                    scaleImageYupXup(src, srcData, srcMode, nComps, srcAlpha, srcWidth, srcHeight, scaledWidth, scaledHeight, dest);
+                    success = scaleImageYupXup(src, srcData, srcMode, nComps, srcAlpha, srcWidth, srcHeight, scaledWidth, scaledHeight, dest);
                 }
             }
+        }
+        if (unlikely(!success)) {
+            delete dest;
+            dest = nullptr;
         }
     } else {
         delete dest;
@@ -3946,7 +3960,7 @@ SplashBitmap *Splash::scaleImage(SplashImageSource src, void *srcData, SplashCol
     return dest;
 }
 
-void Splash::scaleImageYdownXdown(SplashImageSource src, void *srcData, SplashColorMode srcMode, int nComps, bool srcAlpha, int srcWidth, int srcHeight, int scaledWidth, int scaledHeight, SplashBitmap *dest)
+bool Splash::scaleImageYdownXdown(SplashImageSource src, void *srcData, SplashColorMode srcMode, int nComps, bool srcAlpha, int srcWidth, int srcHeight, int scaledWidth, int scaledHeight, SplashBitmap *dest)
 {
     unsigned char *lineBuf, *alphaLineBuf;
     unsigned int *pixBuf, *alphaPixBuf;
@@ -3969,12 +3983,12 @@ void Splash::scaleImageYdownXdown(SplashImageSource src, void *srcData, SplashCo
     // allocate buffers
     lineBuf = (unsigned char *)gmallocn_checkoverflow(srcWidth, nComps);
     if (unlikely(!lineBuf)) {
-        return;
+        return false;
     }
     pixBuf = (unsigned int *)gmallocn_checkoverflow(srcWidth, nComps * sizeof(int));
     if (unlikely(!pixBuf)) {
         gfree(lineBuf);
-        return;
+        return false;
     }
     if (srcAlpha) {
         alphaLineBuf = (unsigned char *)gmalloc(srcWidth);
@@ -4179,9 +4193,11 @@ void Splash::scaleImageYdownXdown(SplashImageSource src, void *srcData, SplashCo
     gfree(alphaLineBuf);
     gfree(pixBuf);
     gfree(lineBuf);
+
+    return true;
 }
 
-void Splash::scaleImageYdownXup(SplashImageSource src, void *srcData, SplashColorMode srcMode, int nComps, bool srcAlpha, int srcWidth, int srcHeight, int scaledWidth, int scaledHeight, SplashBitmap *dest)
+bool Splash::scaleImageYdownXup(SplashImageSource src, void *srcData, SplashColorMode srcMode, int nComps, bool srcAlpha, int srcWidth, int srcHeight, int scaledWidth, int scaledHeight, SplashBitmap *dest)
 {
     unsigned char *lineBuf, *alphaLineBuf;
     unsigned int *pixBuf, *alphaPixBuf;
@@ -4203,7 +4219,7 @@ void Splash::scaleImageYdownXup(SplashImageSource src, void *srcData, SplashColo
     pixBuf = (unsigned int *)gmallocn_checkoverflow(srcWidth, nComps * sizeof(int));
     if (unlikely(!pixBuf)) {
         error(errInternal, -1, "Splash::scaleImageYdownXup. Couldn't allocate pixBuf memory");
-        return;
+        return false;
     }
     lineBuf = (unsigned char *)gmallocn(srcWidth, nComps);
     if (srcAlpha) {
@@ -4328,9 +4344,11 @@ void Splash::scaleImageYdownXup(SplashImageSource src, void *srcData, SplashColo
     gfree(alphaLineBuf);
     gfree(pixBuf);
     gfree(lineBuf);
+
+    return true;
 }
 
-void Splash::scaleImageYupXdown(SplashImageSource src, void *srcData, SplashColorMode srcMode, int nComps, bool srcAlpha, int srcWidth, int srcHeight, int scaledWidth, int scaledHeight, SplashBitmap *dest)
+bool Splash::scaleImageYupXdown(SplashImageSource src, void *srcData, SplashColorMode srcMode, int nComps, bool srcAlpha, int srcWidth, int srcHeight, int scaledWidth, int scaledHeight, SplashBitmap *dest)
 {
     unsigned char *lineBuf, *alphaLineBuf;
     unsigned int pix[splashMaxColorComps];
@@ -4351,7 +4369,7 @@ void Splash::scaleImageYupXdown(SplashImageSource src, void *srcData, SplashColo
     lineBuf = (unsigned char *)gmallocn_checkoverflow(srcWidth, nComps);
     if (unlikely(!lineBuf)) {
         gfree(dest->takeData());
-        return;
+        return false;
     }
     if (srcAlpha) {
         alphaLineBuf = (unsigned char *)gmalloc(srcWidth);
@@ -4485,9 +4503,11 @@ void Splash::scaleImageYupXdown(SplashImageSource src, void *srcData, SplashColo
 
     gfree(alphaLineBuf);
     gfree(lineBuf);
+
+    return true;
 }
 
-void Splash::scaleImageYupXup(SplashImageSource src, void *srcData, SplashColorMode srcMode, int nComps, bool srcAlpha, int srcWidth, int srcHeight, int scaledWidth, int scaledHeight, SplashBitmap *dest)
+bool Splash::scaleImageYupXup(SplashImageSource src, void *srcData, SplashColorMode srcMode, int nComps, bool srcAlpha, int srcWidth, int srcHeight, int scaledWidth, int scaledHeight, SplashBitmap *dest)
 {
     unsigned char *lineBuf, *alphaLineBuf;
     unsigned int pix[splashMaxColorComps];
@@ -4636,6 +4656,8 @@ void Splash::scaleImageYupXup(SplashImageSource src, void *srcData, SplashColorM
 
     gfree(alphaLineBuf);
     gfree(lineBuf);
+
+    return true;
 }
 
 // expand source row to scaledWidth using linear interpolation
@@ -4663,7 +4685,7 @@ static void expandRow(unsigned char *srcBuf, unsigned char *dstBuf, int srcWidth
 }
 
 // Scale up image using bilinear interpolation
-void Splash::scaleImageYupXupBilinear(SplashImageSource src, void *srcData, SplashColorMode srcMode, int nComps, bool srcAlpha, int srcWidth, int srcHeight, int scaledWidth, int scaledHeight, SplashBitmap *dest)
+bool Splash::scaleImageYupXupBilinear(SplashImageSource src, void *srcData, SplashColorMode srcMode, int nComps, bool srcAlpha, int srcWidth, int srcHeight, int scaledWidth, int scaledHeight, SplashBitmap *dest)
 {
     unsigned char *srcBuf, *lineBuf1, *lineBuf2, *alphaSrcBuf, *alphaLineBuf1, *alphaLineBuf2;
     unsigned int pix[splashMaxColorComps];
@@ -4671,7 +4693,7 @@ void Splash::scaleImageYupXupBilinear(SplashImageSource src, void *srcData, Spla
     int i;
 
     if (srcWidth < 1 || srcHeight < 1)
-        return;
+        return false;
 
     // allocate buffers
     srcBuf = (unsigned char *)gmallocn(srcWidth + 1, nComps); // + 1 pixel of padding
@@ -4776,6 +4798,8 @@ void Splash::scaleImageYupXupBilinear(SplashImageSource src, void *srcData, Spla
     gfree(srcBuf);
     gfree(lineBuf1);
     gfree(lineBuf2);
+
+    return true;
 }
 
 void Splash::vertFlipImage(SplashBitmap *img, int width, int height, int nComps)
@@ -5419,7 +5443,7 @@ bool Splash::gouraudTriangleShadedFill(SplashGouraudColor *shading)
                         if (!clip->test(X, Y))
                             continue;
 
-                        assert(fabs(colorinterp - (scanColorMap0 * X + scanColorMap1)) < 1e-10);
+                        assert(fabs(colorinterp - (scanColorMap0 * X + scanColorMap1)) < 1e-7);
                         assert(bitmapOff == Y * rowSize + colorComps * X && scanLineOff == Y * rowSize);
 
                         shading->getParameterizedColor(colorinterp, bitmapMode, &bitmapData[bitmapOff]);
@@ -5444,7 +5468,9 @@ bool Splash::gouraudTriangleShadedFill(SplashGouraudColor *shading)
             // Sadly this current algorithm only supports shadings where the three triangle vertices have the same color
             shading->getNonParametrizedTriangle(i, bitmapMode, xdbl + 0, ydbl + 0, (SplashColorPtr)&color, xdbl + 1, ydbl + 1, (SplashColorPtr)&auxColor1, xdbl + 2, ydbl + 2, (SplashColorPtr)&auxColor2);
             if (!splashColorEqual(color, auxColor1) || !splashColorEqual(color, auxColor2)) {
-                delete blitTarget;
+                if (!bDirectBlit) {
+                    delete blitTarget;
+                }
                 return false;
             }
             for (int m = 0; m < 3; ++m) {
@@ -6094,7 +6120,7 @@ SplashError Splash::shadedFill(SplashPath *path, bool hasBBox, SplashPattern *pa
         yMinI = yMinI * splashAASize;
         yMaxI = (yMaxI + 1) * splashAASize - 1;
     }
-    SplashXPathScanner scanner(&xPath, false, yMinI, yMaxI);
+    SplashXPathScanner scanner(xPath, false, yMinI, yMaxI);
 
     // get the min and max x and y values
     if (vectorAntialias) {

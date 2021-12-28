@@ -34,8 +34,11 @@
 // Copyright (C) 2018 Adam Reichold <adam.reichold@t-online.de>
 // Copyright (C) 2019, 2020 Oliver Sander <oliver.sander@tu-dresden.de>
 // Copyright (C) 2019 Kris Jurka <jurka@ejurka.com>
-// Copyright (C) 2020 Oliver Sander <oliver.sander@tu-dresden.de>
+// Copyright (C) 2020, 2021 Oliver Sander <oliver.sander@tu-dresden.de>
 // Copyright (C) 2020 Philipp Knechtges <philipp-dev@knechtges.com>
+// Copyright (C) 2020 Salvo Miosi <salvo.ilmiosi@gmail.com>
+// Copyright (C) 2021 Peter Williams <peter@newton.cx>
+// Copyright (C) 2021 Christian Persch <chpe@src.gnome.org>
 //
 // To see a description of the changes please see the Changelog file that
 // came with your tarball or type make ChangeLog if you are building from git
@@ -48,6 +51,10 @@
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <fcntl.h>
+#if defined(_WIN32) || defined(__CYGWIN__)
+#    include <io.h> // for _setmode
+#endif
 #include "parseargs.h"
 #include "goo/gmem.h"
 #include "goo/GooString.h"
@@ -385,9 +392,12 @@ static void writePageImage(GooString *filename)
     if (!writer)
         return;
 
-    if (filename->cmp("fd://0") == 0)
+    if (filename->cmp("fd://0") == 0) {
+#if defined(_WIN32) || defined(__CYGWIN__)
+        _setmode(fileno(stdout), O_BINARY);
+#endif
         file = stdout;
-    else
+    } else
         file = fopen(filename->c_str(), "wb");
 
     if (!file) {
@@ -553,9 +563,12 @@ static void beginDocument(GooString *inputFileName, GooString *outputFileName, d
         if (printToWin32) {
             output_file = nullptr;
         } else {
-            if (outputFileName->cmp("fd://0") == 0)
+            if (outputFileName->cmp("fd://0") == 0) {
+#if defined(_WIN32) || defined(__CYGWIN__)
+                _setmode(fileno(stdout), O_BINARY);
+#endif
                 output_file = stdout;
-            else {
+            } else {
                 output_file = fopen(outputFileName->c_str(), "wb");
                 if (!output_file) {
                     fprintf(stderr, "Error opening output file %s\n", outputFileName->c_str());
@@ -636,12 +649,20 @@ static void renderPage(PDFDoc *doc, CairoOutputDev *cairoOut, int pg, double pag
     cairo_t *cr;
     cairo_status_t status;
     cairo_matrix_t m;
+    cairo_font_options_t *font_options;
 
     cr = cairo_create(surface);
 
+    cairo_set_antialias(cr, antialiasEnum);
+
+    font_options = cairo_font_options_create();
+    cairo_get_font_options(cr, font_options);
+    cairo_font_options_set_antialias(font_options, antialiasEnum);
+    cairo_set_font_options(cr, font_options);
+    cairo_font_options_destroy(font_options);
+
     cairoOut->setCairo(cr);
     cairoOut->setPrinting(printing);
-    cairoOut->setAntialias(antialiasEnum);
 
     cairo_save(cr);
     if (ps && output_w > output_h) {
@@ -850,7 +871,6 @@ static void checkInvalidImageOption(bool option, const char *option_name)
 
 int main(int argc, char *argv[])
 {
-    PDFDoc *doc;
     GooString *fileName = nullptr;
     GooString *outputName = nullptr;
     GooString *outputFileName = nullptr;
@@ -1056,7 +1076,7 @@ int main(int argc, char *argv[])
     }
 #endif
 
-    doc = PDFDocFactory().createPDFDoc(*fileName, ownerPW, userPW);
+    std::unique_ptr<PDFDoc> doc = PDFDocFactory().createPDFDoc(*fileName, ownerPW, userPW);
     if (!doc->isOk()) {
         fprintf(stderr, "Error opening PDF file.\n");
         exit(1);
@@ -1121,7 +1141,7 @@ int main(int argc, char *argv[])
 #ifdef USE_CMS
     cairoOut->setDisplayProfile(profile);
 #endif
-    cairoOut->startDoc(doc);
+    cairoOut->startDoc(doc.get());
     if (sz != 0)
         crop_w = crop_h = sz;
     pg_num_len = numberOfCharacters(doc->getNumPages());
@@ -1176,14 +1196,13 @@ int main(int argc, char *argv[])
         if (pg == firstPage)
             beginDocument(fileName, outputFileName, output_w, output_h);
         beginPage(&output_w, &output_h);
-        renderPage(doc, cairoOut, pg, pg_w, pg_h, output_w, output_h);
+        renderPage(doc.get(), cairoOut, pg, pg_w, pg_h, output_w, output_h);
         endPage(imageFileName);
     }
     endDocument();
 
     // clean up
     delete cairoOut;
-    delete doc;
     if (fileName)
         delete fileName;
     if (outputName)

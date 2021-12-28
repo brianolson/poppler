@@ -8,7 +8,8 @@
 // Copyright 2010 Albert Astals Cid <aacid@kde.org>
 // Copyright 2017 Adrian Johnson <ajohnson@redneon.com>
 // Copyright 2018 Adam Reichold <adam.reichold@t-online.de>
-// Copyright 2019 Oliver Sander <oliver.sander@tu-dresden.de>
+// Copyright 2019, 2021 Oliver Sander <oliver.sander@tu-dresden.de>
+// Copyright 2021 Christian Persch <chpe@src.gnome.org>
 //
 //========================================================================
 
@@ -19,7 +20,7 @@
 #include "goo/GooString.h"
 #include "PDFDoc.h"
 #include "LocalPDFDocBuilder.h"
-#include "StdinPDFDocBuilder.h"
+#include "FDPDFDocBuilder.h"
 #ifdef ENABLE_LIBCURL
 #    include "CurlPDFDocBuilder.h"
 #endif
@@ -37,7 +38,7 @@ PDFDocFactory::PDFDocFactory(std::vector<PDFDocBuilder *> *pdfDocBuilders)
         builders = new std::vector<PDFDocBuilder *>();
     }
     builders->push_back(new LocalPDFDocBuilder());
-    builders->push_back(new StdinPDFDocBuilder());
+    builders->push_back(new FileDescriptorPDFDocBuilder());
 #ifdef ENABLE_LIBCURL
     builders->push_back(new CurlPDFDocBuilder());
 #endif
@@ -53,7 +54,7 @@ PDFDocFactory::~PDFDocFactory()
     }
 }
 
-PDFDoc *PDFDocFactory::createPDFDoc(const GooString &uri, GooString *ownerPassword, GooString *userPassword, void *guiDataA)
+std::unique_ptr<PDFDoc> PDFDocFactory::createPDFDoc(const GooString &uri, GooString *ownerPassword, GooString *userPassword, void *guiDataA)
 {
     for (int i = builders->size() - 1; i >= 0; i--) {
         PDFDocBuilder *builder = (*builders)[i];
